@@ -1,0 +1,33 @@
+name: Set up Rust
+description: >-
+  Installs a Rust toolchain with the minimal profile, by default the one CI pins, and makes it the default for the rest
+  of the job.
+
+inputs:
+  toolchain:
+    # The pin for every workflow. CI denies every warning, so a new Rust release, with new lints, would fail PRs that
+    # changed nothing: the pin moves only on purpose, once every check passes on the new toolchain.
+    description: The toolchain to install. Defaults to the one CI pins.
+    default: "1.99.0"
+  components:
+    description: Comma-separated components to add, such as clippy or rustfmt.
+    default: ""
+  targets:
+    description: Comma-separated targets to add, such as x86_64-unknown-none.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        TOOLCHAIN: ${{ inputs.toolchain }}
+        COMPONENTS: ${{ inputs.components }}
+        TARGETS: ${{ inputs.targets }}
+      run: |
+        args=(--profile minimal --no-self-update)
+        [[ -z "$COMPONENTS" ]] || args+=(--component "$COMPONENTS")
+        [[ -z "$TARGETS" ]] || args+=(--target "$TARGETS")
+        rustup toolchain install "$TOOLCHAIN" "${args[@]}"
+        rustup default "$TOOLCHAIN"
+        rustc --version

@@ -1,0 +1,12 @@
+{
+  "config": {
+    "default": true,
+    // Lines are at most 120 columns, headings, tables and code blocks included. A line still passes when nothing but
+    // one word, such as a long URL, runs past that.
+    "MD013": { "line_length": 120 },
+    // Pipes of a table line up in every row, the delimiter row included.
+    "MD060": { "style": "aligned" }
+  },
+  "globs": ["**/*.md"],
+  "ignores": ["target/**", "node_modules/**"]
+}

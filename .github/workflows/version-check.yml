@@ -1,0 +1,40 @@
+name: Version check
+
+on:
+  pull_request:
+    # edited: retargeting a PR to main is an edited event, and without it such a PR has no run of this check until
+    # its next push. A title or body edit runs it again too, which is cheap.
+    types: [opened, synchronize, reopened, edited]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      # main as it is now, not as it was when the PR was opened.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.base_ref }}
+          path: base
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          base=$(cargo metadata --no-deps --format-version 1 --manifest-path base/Cargo.toml | jq -r '.packages[0].version')
+          head=$(cargo metadata --no-deps --format-version 1 --manifest-path head/Cargo.toml | jq -r '.packages[0].version')
+          # Semver order, so that 0.2.0-rc.1 is below 0.2.0 and 0.10.0 above 0.9.0. The highest of the two is printed last.
+          highest=$(npx --yes semver@7.8.6 "$base" "$head" | tail -n 1)
+          if [[ "$head" == "$base" || "$highest" != "$head" ]]; then
+            echo "::error::version $head in Cargo.toml is not greater than $base on $BASE_REF"
+            exit 1
+          fi
+          echo "Version $head is greater than $base on $BASE_REF."

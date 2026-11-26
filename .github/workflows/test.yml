@@ -1,0 +1,61 @@
+name: Test
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+        with:
+          targets: x86_64-unknown-none
+      - run: cargo test --locked
+      # Release builds leave out the debug checks but keep the unlinked mark, which the tests read.
+      - run: cargo test --locked --release
+      # The crate as cargo publish uploads it, built on its own, so that a release cannot fail at the upload.
+      - run: cargo package --locked
+      # no_std: a bare-metal target has no std to link.
+      - run: cargo build --locked --target x86_64-unknown-none
+
+  miri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Miri needs nightly. The nightly is pinned like the stable toolchain, so that a new one cannot fail a PR that
+      # changed nothing.
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: nightly-2026-10-04
+          components: miri,rust-src
+      # Every pointer access of the tests and doctests, under both aliasing models, with strict provenance.
+      - run: cargo miri test --locked
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance
+      - run: cargo miri test --locked
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-tree-borrows
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The rust-version of Cargo.toml, read with the runner's own cargo, so that this job cannot drift from it.
+      - id: msrv
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].rust_version // empty')
+          if [[ -z "$version" ]]; then
+            echo "::error::Cargo.toml sets no rust-version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      # The library alone, as the minimum version is promised for it and not for the tests.
+      - run: cargo build --lib --locked

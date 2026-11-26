@@ -1,0 +1,46 @@
+name: PR check
+
+on:
+  pull_request:
+    # edited: the title, the body or the base branch changed, perhaps after both checks passed.
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  source-branch:
+    runs-on: ubuntu-latest
+    steps:
+      # Required check: main only takes PRs from rc/* branches of this repo, never forks. The job runs on every PR and
+      # decides here, not in an if: of its own: a skipped job passes, so a PR opened into another branch and then
+      # retargeted to main would show it green.
+      - env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [[ "$BASE_REF" != main ]]; then
+            echo "A PR into $BASE_REF, not main: any source branch will do."
+            exit 0
+          fi
+          if [[ "$HEAD_REF" != rc/* || "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]]; then
+            echo "::error::main only takes PRs from rc/* branches of $GITHUB_REPOSITORY (got $HEAD_REPO:$HEAD_REF)"
+            exit 1
+          fi
+
+  pr-check:
+    runs-on: ubuntu-latest
+    steps:
+      # Required check: the PR title is the body of the merge commit, so it follows the commit style. The PR body
+      # stays out of the commit, but it must not be empty.
+      - env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          (( ${#TITLE} <= 72 )) || fail "title is over 72 characters"
+          [[ "$TITLE" =~ ^[A-Z] ]] || fail "title must start with a capital letter"
+          [[ "$TITLE" != *. ]] || fail "title must not end with a period"
+          [[ "${TITLE^^}" != WIP* ]] || fail "title must not start with WIP"
+          [[ -n "${BODY//[[:space:]]/}" ]] || fail "body must not be empty"

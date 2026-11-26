@@ -67,6 +67,27 @@ other memory that never moves, and pin it with `Pin::new_unchecked`.
 
 Rust 1.99.
 
+## Development
+
+CI runs these checks on each PR:
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets --locked
+cargo test --locked
+cargo test --locked --release
+cargo doc --no-deps --locked
+cargo build --locked --target x86_64-unknown-none
+MIRIFLAGS=-Zmiri-strict-provenance cargo +nightly miri test --locked
+MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo +nightly miri test --locked
+```
+
+`Cargo.toml` denies every warning, Clippy's pedantic, nursery, cargo and restriction groups included, so these checks
+need no flags. CI runs them on the toolchains pinned in `.github/actions/setup-rust` and `.github/workflows/test.yml`.
+The no_std build needs its target: `rustup target add x86_64-unknown-none`.
+
+CI also packages the crate, builds the library on Rust 1.99, the minimum, and lints the Markdown with markdownlint-cli2.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
