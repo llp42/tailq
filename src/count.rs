@@ -1,0 +1,88 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Leonardo Lopes Pereira <leonardolopespereira@outlook.com>
+
+//! Whether a queue keeps its length.
+
+use core::cell::Cell;
+use core::fmt;
+
+/// How a [`TailQueue`](crate::TailQueue) keeps its length: [`Counted`] or [`Uncounted`].
+///
+/// The trait is sealed; this crate's two types are its only
+/// implementations.
+pub trait Count: Sealed + fmt::Debug {}
+
+/// The [`Count`] of a queue that keeps its length in its head, one word,
+/// for an O(1) [`len`](crate::TailQueue::len).
+#[derive(Debug)]
+pub struct Counted(Cell<usize>);
+
+impl Counted {
+    /// Returns the length.
+    pub(crate) const fn get(&self) -> usize {
+        self.0.get()
+    }
+}
+
+/// The [`Count`] of a queue that keeps no length, so its head stays two
+/// words.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct Uncounted;
+
+impl Count for Counted {}
+impl Count for Uncounted {}
+
+/// The length operations behind [`Count`], private so
+/// no other crate implements it.
+#[expect(
+    unnameable_types,
+    reason = "a supertrait no other crate can name is what seals `Count`"
+)]
+pub trait Sealed: Sized {
+    /// The length of an empty queue, all zero bytes.
+    const ZERO: Self;
+
+    /// Adds `n` to the length.
+    fn add(&self, n: usize);
+
+    /// Subtracts one from the length.
+    fn sub_one(&self);
+
+    /// Returns the length and sets it to zero.
+    fn take(&self) -> usize;
+}
+
+impl Sealed for Counted {
+    const ZERO: Self = Self(Cell::new(0));
+
+    #[inline]
+    fn add(&self, n: usize) {
+        self.0.set(self.0.get().wrapping_add(n));
+    }
+
+    #[inline]
+    fn sub_one(&self) {
+        self.0.set(self.0.get().wrapping_sub(1));
+    }
+
+    #[inline]
+    fn take(&self) -> usize {
+        self.0.replace(0)
+    }
+}
+
+impl Sealed for Uncounted {
+    const ZERO: Self = Self;
+
+    #[inline]
+    fn add(&self, _: usize) {}
+
+    #[inline]
+    fn sub_one(&self) {}
+
+    #[inline]
+    fn take(&self) -> usize {
+        0
+    }
+}
