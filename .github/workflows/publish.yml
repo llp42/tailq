@@ -1,0 +1,76 @@
+name: Publish
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    # Only a merged PR from an rc/* branch of this repository: not one closed unmerged, not a fork's.
+    if: >-
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'rc/') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      # The commit the merge made on main, not whatever main is by the time this runs.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      # The toolchain the PR checks ran on, pinned in .github/actions/setup-rust.
+      - uses: ./.github/actions/setup-rust
+      # rc/0.2.0 publishes version 0.2.0 and nothing else.
+      - id: version
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          if [[ "$HEAD_REF" != "rc/$version" ]]; then
+            echo "::error::branch $HEAD_REF does not match the crate version $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # Here, with no publish credentials: the tests, and the crate as cargo publish uploads it, built on its own.
+      - run: cargo test --locked
+      - run: cargo package --locked
+
+  publish:
+    # Only once verify passed, so under its guards as well.
+    needs: verify
+    runs-on: ubuntu-latest
+    # Its protection rules gate the job, and crates.io can require it of the workflow that publishes.
+    environment: release
+    # One publish at a time. A later one waits for the one before to tag, in order, and none is cancelled.
+    concurrency:
+      group: publish
+      queue: max
+    permissions:
+      # To push the tag.
+      contents: write
+      # Trusted publishing: crates.io trusts this workflow, so no token is stored.
+      id-token: write
+    steps:
+      # The same commit verify checked.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - uses: ./.github/actions/setup-rust
+      - id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+      # Only once the version is published: v0.2.0 on the commit the merge made.
+      - env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "tailq $VERSION"
+          git push origin "v$VERSION"
