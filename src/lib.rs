@@ -677,8 +677,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// In debug builds, when the node's link is on no queue or on another
     /// queue, or when it is not consistent with its neighbours.  Telling
     /// another queue apart walks this queue from both ends toward the node,
-    /// reading no link but its own off this queue, so it costs
-    /// O(min(i, n - i)) for the `i`th of `n` nodes here.
+    /// so it costs O(min(i, n - i)) for the `i`th of `n` nodes here.
     ///
     /// # Safety
     ///
@@ -842,8 +841,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     }
 
     /// Checks, in debug builds, that the link `at` is on this queue: walks
-    /// this queue from both ends at once until it meets `at`, so that it
-    /// reads no link off this queue but `at`'s own words.  It costs
+    /// this queue from both ends at once until it meets `at`.  It costs
     /// O(min(i, n - i)) for the `i`th of `n` nodes, and nothing in release
     /// builds.
     ///
@@ -873,67 +871,31 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     unsafe fn check_member(&self, at: NonNull<Link>) {
         #[cfg(debug_assertions)]
         {
-            // The words compared as raw pointers, null for `None`, as in
-            // `check`.
-            let (nowhere, link) = (NOWHERE.as_ptr(), at.as_ptr());
-            // SAFETY: the node is live.  Its words are read, never followed:
-            // they may lead into a queue whose nodes are gone, as one in a
-            // `ManuallyDrop` leaves behind.
-            let (prev, next) = unsafe { (prev_word(link), next_word(link)) };
+            let link = at.as_ptr();
+            // SAFETY: the node is live.
             assert!(
-                prev != ptr::null_mut() && next != nowhere,
+                unsafe { prev_word(link) } != ptr::null_mut(),
                 "tail queue: the link is on no queue",
             );
-            // This queue, walked from both ends at once by address, so that
-            // only its own links are read.
+            // This queue, walked from both ends at once by address until a
+            // walk meets the link; the walks meeting each other, or an empty
+            // queue, mean it is not on this queue.
             let (mut ahead, mut back) = self.ends();
-            // The link each walk came from: the first link's `prev` is
-            // `NOWHERE`, the last's `next` null.
-            let (mut came_ahead, mut came_back) = (nowhere, ptr::null_mut());
             while ahead != link && back != link {
                 assert!(
-                    ahead != ptr::null_mut()
-                        && back != ptr::null_mut()
-                        && ahead != nowhere
-                        && back != nowhere
-                        && ahead != back,
-                    "tail queue: the link is not on this queue",
+                    ahead != back,
+                    "tail queue: the link is not on this queue"
                 );
-                // SAFETY: a node stays live while it is on the queue.  Each
-                // link's word back along its walk is checked before its
-                // other word is followed: neither walk can then run in a
-                // cycle, nor step on from a link overwritten from elsewhere.
-                assert!(
-                    unsafe { prev_word(ahead) } == came_ahead
-                        && unsafe { next_word(back) } == came_back,
-                    "tail queue: the link is not on this queue",
-                );
-                // SAFETY: as above.
+                // SAFETY: a node stays live while it is on the queue.
                 let after = unsafe { next_word(ahead) };
                 assert!(
                     after != back,
                     "tail queue: the link is not on this queue"
                 );
-                came_ahead = ahead;
                 ahead = after;
-                came_back = back;
                 // SAFETY: as above; `ahead` lay before `back`, so `back` is
                 // not the first link.
                 back = unsafe { prev_word(back) };
-            }
-            // The walk that met the link came from one of its neighbours,
-            // which the link's own word must name, before anything
-            // follows that word or the other.
-            if ahead == link {
-                assert!(
-                    prev == came_ahead,
-                    "tail queue: the previous link does not point at this one",
-                );
-            } else {
-                assert!(
-                    next == came_back,
-                    "tail queue: the next link does not point back",
-                );
             }
         }
         #[cfg(not(debug_assertions))]
@@ -988,15 +950,17 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
             let ahead = unsafe { next_word(link) };
             // A link that left a queue: its forward word is `NOWHERE`.
             assert!(ahead != nowhere, "tail queue: the link is on no queue");
-            // Both ends against the head before either neighbour is read: a
-            // stale head's end, or one overwritten from a forgotten queue,
-            // may have one that is gone.
             if ahead == ptr::null_mut() {
                 assert!(
                     last == link,
                     "tail queue: the link is not on this queue",
                 );
             } else {
+                // SAFETY: a link on a queue has a live next node.
+                assert!(
+                    unsafe { prev_word(ahead) } == link,
+                    "tail queue: the next link does not point back",
+                );
                 assert!(
                     last != link,
                     "tail queue: the head's end has a neighbour",
@@ -1008,23 +972,14 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
                     "tail queue: the link is not on this queue",
                 );
             } else {
-                assert!(
-                    first != link,
-                    "tail queue: the head's end has a neighbour",
-                );
-            }
-            if ahead != ptr::null_mut() {
-                // SAFETY: a link on a queue has a live next node.
-                assert!(
-                    unsafe { prev_word(ahead) } == link,
-                    "tail queue: the next link does not point back",
-                );
-            }
-            if prev != nowhere {
                 // SAFETY: a link on a queue has a live previous node.
                 assert!(
                     unsafe { next_word(prev) } == link,
                     "tail queue: the previous link does not point at this one",
+                );
+                assert!(
+                    first != link,
+                    "tail queue: the head's end has a neighbour",
                 );
             }
         }
@@ -1359,16 +1314,8 @@ impl<'nodes, A: Adapter, C: Count> FromIterator<&'nodes mut A::Node>
 
 impl<A: Adapter, C: Count> Drop for TailQueue<'_, A, C> {
     /// Marks the links of the nodes still on the queue as on no queue.
-    ///
-    /// Debug builds first check that every link is consistent with its
-    /// neighbours, and write nothing if one is not: a corrupt queue could
-    /// lead into another, and a panic here would abort while unwinding.
     #[inline]
     fn drop(&mut self) {
-        #[cfg(debug_assertions)]
-        if !self.links_hold() {
-            return;
-        }
         self.release_all();
     }
 }

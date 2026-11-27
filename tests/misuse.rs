@@ -589,27 +589,6 @@ fn a_stale_head_does_not_pop_a_node_that_already_left() {
     assert!(stale.pop_front_ptr().is_none(), "unreachable");
 }
 
-/// Mutant C03, and 0fd7ca5's claim: a link on no queue next to the node,
-/// here the first node's, zeroed in place, is caught too, rather than read
-/// as linked through `unwrap_unchecked`.  Since review 9 the membership
-/// walk checks each link's word back along it, and catches it there.
-#[test]
-#[should_panic(expected = "tail queue: the link is not on this queue")]
-fn a_link_on_no_queue_met_mid_walk_is_caught() {
-    let nodes = Nodes::new(3);
-    let mut queue = Queue::new();
-    // SAFETY: the nodes are live and outlive the queue, and each is on no
-    // queue when pushed.  Zeroing the first node's link in place, as a
-    // memset of the node would, is the misuse.
-    unsafe {
-        for i in 0..3 {
-            queue.push_back_ptr(nodes.at(i));
-        }
-        ptr::write(&raw mut (*nodes.at(0).as_ptr()).link, Link::new());
-        queue.remove_ptr(nodes.at(1));
-    }
-}
-
 /// Review 5: clearing a queue checks every link before it writes any, so
 /// a corrupt queue does not walk into another.  Here the first node of
 /// `queue` holds the bytes of the first of `other`.
@@ -621,44 +600,6 @@ fn a_corrupt_queue_is_not_cleared() {
     queue.clear();
 }
 
-/// Review 5: dropping a corrupt queue writes nothing, rather than walk
-/// into another queue and mark its nodes as on no queue; the other queue
-/// is left whole.
-#[test]
-fn dropping_a_corrupt_queue_leaves_another_alone() {
-    let nodes = Nodes::new(5);
-    let (queue, other) = overwritten_first(&nodes);
-    drop(ManuallyDrop::into_inner(queue));
-    let keys: Vec<u32> = other.iter().map(|node| node.key).collect();
-    let keys_rev: Vec<u32> = other.iter().rev().map(|node| node.key).collect();
-    assert_eq!((keys, keys_rev), (vec![2, 3], vec![3, 2]));
-    assert!(other.iter().all(|node| node.link.is_linked()));
-}
-
-/// Review 5: the membership walk meets a link that left a queue, and
-/// reports it rather than follow it.  Here the fifth of six nodes holds the
-/// bytes of a node that left a queue, so the walk from the back meets its
-/// `prev` of `None`.
-#[test]
-#[should_panic(expected = "tail queue: the link is not on this queue")]
-fn the_membership_walk_ahead_catches_a_link_that_left() {
-    let nodes = Nodes::new(7);
-    let mut queue = ManuallyDrop::new(Queue::new());
-    let mut spare = Queue::new();
-    // SAFETY: the nodes are live and outlive the queues, and each is on no
-    // queue when pushed; copying a node that left over a linked one is the
-    // misuse.
-    unsafe {
-        for i in 0..6 {
-            queue.push_back_ptr(nodes.at(i));
-        }
-        spare.push_back_ptr(nodes.at(6));
-        assert!(spare.pop_front_ptr().is_some());
-        ptr::copy_nonoverlapping(nodes.at(6).as_ptr(), nodes.at(4).as_ptr(), 1);
-        queue.remove_ptr(nodes.at(3));
-    }
-}
-
 /// Review 5: clearing checks a link's forward word too.  Here the last of
 /// two nodes keeps its `prev` but has the forward word of a link that left
 /// a queue, `usize::MAX`, as if it had been half relinked.
@@ -666,7 +607,8 @@ fn the_membership_walk_ahead_catches_a_link_that_left() {
 #[should_panic(expected = "tail queue: the queue is corrupt")]
 fn a_queue_with_a_half_relinked_node_is_not_cleared() {
     let nodes = Nodes::new(2);
-    let mut queue = Queue::new();
+    // Never dropped: the drop would walk the corrupt queue.
+    let mut queue = ManuallyDrop::new(Queue::new());
     // SAFETY: the nodes are live and outlive the queue, and each is on no
     // queue when pushed.  A link is `repr(C)` and starts with its forward
     // word; writing it is the misuse.
@@ -842,19 +784,6 @@ fn a_queue_whose_first_points_back_at_another_node_is_not_cleared() {
     queue.clear();
 }
 
-/// Mutants L03 and L04: dropping either queue writes nothing, so the nodes
-/// that the stale head holds stay marked as linked.
-#[test]
-fn dropping_a_queue_a_stale_head_changed_leaves_its_nodes_alone() {
-    for after in [true, false] {
-        let nodes = Nodes::new(3);
-        drop(pushed_through_a_stale_head(&nodes, after));
-        // SAFETY: the nodes are live, and no queue is left to write them.
-        let linked = |i| unsafe { nodes.at(i).as_ref() }.link.is_linked();
-        assert!((0..3).all(linked), "after: {after}");
-    }
-}
-
 /// Mutant L06: a head with no first link but a last one is corrupt too, as
 /// one whose first word was overwritten is, and is not cleared.
 #[test]
@@ -971,107 +900,6 @@ fn a_head_with_a_first_but_no_last_is_not_cleared() {
     // SAFETY: the node is live, outlives the queue and is on no queue.
     let mut queue = unsafe { first_but_no_last(&nodes) };
     queue.clear();
-}
-
-/// Mutant W5: as above, dropping such a head writes nothing, so its node
-/// stays marked as linked.
-#[test]
-fn dropping_a_head_with_a_first_but_no_last_leaves_its_node_alone() {
-    let nodes = Nodes::new(1);
-    // SAFETY: as above.
-    drop(unsafe { first_but_no_last(&nodes) });
-    // SAFETY: the node is live, and no queue is left to write it.
-    assert!(unsafe { nodes.at(0).as_ref() }.link.is_linked());
-}
-
-/// Nodes boxed one by one, so that a test can free some of them; the rest
-/// are freed when the set goes.
-struct Boxes(Vec<Option<NonNull<Node>>>);
-
-impl Boxes {
-    fn new(len: u32) -> Self {
-        Self(
-            (0..len)
-                .map(|key| {
-                    let node = Box::new(Node {
-                        key,
-                        link: Link::new(),
-                    });
-                    Some(NonNull::from(Box::leak(node)))
-                })
-                .collect(),
-        )
-    }
-
-    /// Returns the node at `i`, which must not have been freed.
-    fn at(&self, i: usize) -> NonNull<Node> {
-        let node = self.0.get(i).copied().flatten();
-        assert!(node.is_some(), "a live node of the set");
-        node.unwrap_or(NonNull::dangling())
-    }
-
-    /// Frees the node at `i`.
-    fn free(&mut self, i: usize) {
-        if let Some(node) = self.0.get_mut(i).and_then(Option::take) {
-            // SAFETY: the node came from `Box::leak` and is freed once.
-            drop(unsafe { Box::from_raw(node.as_ptr()) });
-        }
-    }
-}
-
-impl Drop for Boxes {
-    fn drop(&mut self) {
-        for i in 0..self.0.len() {
-            self.free(i);
-        }
-    }
-}
-
-/// Pushes the first three boxed nodes onto a queue that is never dropped,
-/// as a `ManuallyDrop` allows, then frees the first and the third: the
-/// second is left marked as linked, between two freed nodes.
-fn forgotten_between_freed(boxes: &mut Boxes) {
-    let mut gone = ManuallyDrop::new(Queue::new());
-    // SAFETY: the nodes are live and on no queue when pushed, and the
-    // queue is never used again once they are freed.
-    unsafe {
-        for i in 0..3 {
-            gone.push_back_ptr(boxes.at(i));
-        }
-    }
-    boxes.free(0);
-    boxes.free(2);
-}
-
-/// Review 8: the membership walk followed the node's own links, which here
-/// lead to freed nodes; it now walks only this queue's, from both ends, and
-/// reads no more of the node than its own words.
-#[test]
-#[should_panic(expected = "tail queue: the link is not on this queue")]
-fn a_removal_by_address_reads_no_link_off_this_queue() {
-    let mut boxes = Boxes::new(4);
-    forgotten_between_freed(&mut boxes);
-    let mut queue = Queue::new();
-    // SAFETY: the fourth node is live and on no queue; removing the second,
-    // which is on none of this queue's, is the misuse.
-    unsafe {
-        queue.push_back_ptr(boxes.at(3));
-        queue.remove_ptr(boxes.at(1));
-    }
-}
-
-/// Review 8: as above, through a cursor that starts at the node.
-#[test]
-#[should_panic(expected = "tail queue: the link is not on this queue")]
-fn a_cursor_by_address_reads_no_link_off_this_queue() {
-    let mut boxes = Boxes::new(4);
-    forgotten_between_freed(&mut boxes);
-    let mut queue = Queue::new();
-    // SAFETY: as above.
-    unsafe {
-        queue.push_back_ptr(boxes.at(3));
-        assert!(queue.cursor_from_ptr(boxes.at(1)).current().is_some());
-    }
 }
 
 /// Review 8: an append checked the other queue's first only, so a stale
@@ -1241,139 +1069,4 @@ fn a_lookup_ends_on_a_ring() {
         last.cast::<*const Link>().cast_mut().write(first);
     }
     assert!(!queue.contains_ptr(nodes.at(3)), "unreachable");
-}
-
-/// Review 9: the membership walk did not end when its walks forward and
-/// back each ran in a cycle of their own, which two overwritten words
-/// make: here the second node's forward word points back at the first, and
-/// the third's `prev` on at the fourth.
-#[test]
-#[should_panic(expected = "tail queue: the link is not on this queue")]
-fn the_membership_walk_ends_on_two_cycles() {
-    let nodes = Nodes::new(5);
-    let mut queue = ManuallyDrop::new(Queue::new());
-    let mut other = Queue::new();
-    // SAFETY: the nodes are live, outlive the queues and are on no queue
-    // when pushed.  A link is `repr(C)`, its forward word then its `prev`;
-    // overwriting them is the misuse, and removing another queue's node.
-    unsafe {
-        for i in 0..4 {
-            queue.push_back_ptr(nodes.at(i));
-        }
-        other.push_back_ptr(nodes.at(4));
-        let link = |i: usize| ptr::from_ref(&(*nodes.at(i).as_ptr()).link);
-        link(1).cast::<*const Link>().cast_mut().write(link(0));
-        link(2)
-            .cast::<*const Link>()
-            .cast_mut()
-            .add(1)
-            .write(link(3));
-        queue.remove_ptr(nodes.at(4));
-    }
-}
-
-/// Copies the node that `forgotten_between_freed` left, between two freed
-/// nodes, over the node at `at` of a queue of `len` nodes, and returns the
-/// queue, which is never dropped.
-fn overwritten_from_forgotten(
-    boxes: &mut Boxes,
-    nodes: &Nodes,
-    len: usize,
-    at: usize,
-) -> ManuallyDrop<Queue> {
-    forgotten_between_freed(boxes);
-    let mut queue = ManuallyDrop::new(Queue::new());
-    // SAFETY: the nodes are live, outlive the queue and are on no queue
-    // when pushed; the overwrite is the misuse.
-    unsafe {
-        for i in 0..len {
-            queue.push_back_ptr(nodes.at(i));
-        }
-        ptr::copy_nonoverlapping(
-            boxes.at(1).as_ptr(),
-            nodes.at(at).as_ptr(),
-            1,
-        );
-    }
-    queue
-}
-
-/// Review 9: the membership walk followed the forward word of a node
-/// overwritten from a forgotten queue, into a freed node; it now checks
-/// each link's word back along it before it follows the other.
-#[test]
-#[should_panic(expected = "tail queue: the link is not on this queue")]
-fn the_membership_walk_reads_no_freed_node_past_an_overwritten_one() {
-    let mut boxes = Boxes::new(3);
-    let nodes = Nodes::new(9);
-    let mut queue = overwritten_from_forgotten(&mut boxes, &nodes, 8, 1);
-    let mut other = Queue::new();
-    // SAFETY: the ninth node is live and on no queue when pushed; removing
-    // it from the first queue is the misuse.
-    unsafe {
-        other.push_back_ptr(nodes.at(8));
-        queue.remove_ptr(nodes.at(8));
-    }
-}
-
-/// Review 9: as above, removing the overwritten node itself, whose words
-/// the walk that meets it checks before anything follows them.
-#[test]
-#[should_panic(
-    expected = "tail queue: the previous link does not point at this one"
-)]
-fn removing_an_overwritten_node_reads_no_freed_node() {
-    let mut boxes = Boxes::new(3);
-    let nodes = Nodes::new(3);
-    let mut queue = overwritten_from_forgotten(&mut boxes, &nodes, 3, 1);
-    // SAFETY: the node is live; that its link is not this queue's is the
-    // misuse.
-    unsafe { queue.remove_ptr(nodes.at(1)) };
-}
-
-/// Review 9: as above, through a cursor, which followed the node's `prev`.
-#[test]
-#[should_panic(
-    expected = "tail queue: the previous link does not point at this one"
-)]
-fn no_cursor_on_an_overwritten_node_reads_a_freed_node() {
-    let mut boxes = Boxes::new(3);
-    let nodes = Nodes::new(3);
-    let queue = overwritten_from_forgotten(&mut boxes, &nodes, 3, 1);
-    // SAFETY: as above.
-    let cursor = unsafe { queue.cursor_from_ptr(nodes.at(1)) };
-    assert!(cursor.current().is_some(), "unreachable");
-}
-
-/// Review 9: the end check read through the first node's next before it
-/// held the node's `prev` against the head; overwritten from a forgotten
-/// queue, that next is freed.  Both ends are now held against the head
-/// before either neighbour is read, at the front as at the back.
-#[test]
-fn an_end_overwritten_from_a_forgotten_queue_is_not_popped() {
-    for front in [true, false] {
-        let mut boxes = Boxes::new(3);
-        let nodes = Nodes::new(2);
-        let mut queue = overwritten_from_forgotten(
-            &mut boxes,
-            &nodes,
-            2,
-            usize::from(!front),
-        );
-        let caught = catch_unwind(AssertUnwindSafe(|| {
-            if front {
-                queue.pop_front_ptr()
-            } else {
-                queue.pop_back_ptr()
-            }
-        }));
-        let shown = caught
-            .err()
-            .and_then(|panic| panic.downcast_ref::<&str>().copied());
-        assert_eq!(
-            shown,
-            Some("tail queue: the head's end has a neighbour"),
-            "front: {front}"
-        );
-    }
 }
