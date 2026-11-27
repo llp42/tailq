@@ -536,18 +536,6 @@
 //! tailq::adapter!(NodeLink = Node { link, mut key: u64 });
 //! ```
 //!
-//! The fifth review found the node and payload types pasted several times
-//! into the expansion, and a type macro expands at each paste: a macro
-//! answering differently each time lent a 64-byte payload over a one-byte
-//! field.  Each type is pasted once now, and a payload whose one paste is
-//! not its field's type fails:
-//!
-//! ```compile_fail,E0308
-//! use tailq::Link;
-//! struct Node { link: Link, key: u8 }
-//! tailq::adapter!(NodeLink = Node { link, mut key: tailq_flip::flip!(k; [u8; 64], u8) });
-//! ```
-//!
 //! On nightly, `offset_of!` walks into an enum's variant, which a field
 //! access cannot, so the raw place went through a const `DerefMut` to
 //! another type's link while the offset was that of a reference; the
@@ -595,4 +583,84 @@
 //!     }
 //! }
 //! tailq::adapter!(NodeLink = Node { V.link });
+//! ```
+//!
+//! Review 6: the link's places sit in an `unsafe` block, so a path could
+//! take a union field there and deref its `ManuallyDrop`, which a reference
+//! to the field outside the block now rejects.  Here a one-variant enum
+//! derefs, reading nothing, to its own field, a union; the place reaches a
+//! link through the union's `V` while `offset_of!` measures its `link: ()`,
+//! and a node built as `Pun { link: () }` holds no link at `OFFSET`:
+//!
+//! ```compile_fail,E0133
+//! #![feature(offset_of_enum, const_trait_impl, const_convert)]
+//! #![allow(non_snake_case, dangerous_implicit_autorefs)]
+//! use core::mem::ManuallyDrop;
+//! use core::ops::{Deref, DerefMut};
+//! use tailq::Link;
+//! struct Inner { link: Link }
+//! struct Shadow { x: Inner }
+//! union Pun { V: ManuallyDrop<Shadow>, link: () }
+//! enum Node { V { x: Pun } }
+//! const impl Deref for Node {
+//!     type Target = Pun;
+//!     fn deref(&self) -> &Pun { let Node::V { x } = self; x }
+//! }
+//! const impl DerefMut for Node {
+//!     fn deref_mut(&mut self) -> &mut Pun { let Node::V { x } = self; x }
+//! }
+//! tailq::adapter!(NodeLink = Node { V.x.link });
+//! ```
+//!
+//! Review 6, mutants A04 to A06: the payload's place, too, is taken
+//! through shared derefs only, on a slot nothing writes, and must lie where
+//! `offset_of!` says.  On nightly a payload path through an enum's variant
+//! reached through a const `DerefMut` would otherwise lend a `&mut u64`
+//! over a `&'static u64`:
+//!
+//! ```compile_fail,E0080
+//! #![feature(offset_of_enum, const_trait_impl, const_convert)]
+//! #![allow(non_snake_case, dangerous_implicit_autorefs)]
+//! use core::ops::{Deref, DerefMut};
+//! use tailq::Link;
+//! struct Inner { key: u64 }
+//! struct Shadow { V: Inner }
+//! enum Payload { V { key: &'static u64, shadow: Shadow } }
+//! struct Node { link: Link, payload: Payload }
+//! const impl Deref for Payload {
+//!     type Target = Shadow;
+//!     fn deref(&self) -> &Shadow { let Payload::V { shadow, .. } = self; shadow }
+//! }
+//! const impl DerefMut for Payload {
+//!     fn deref_mut(&mut self) -> &mut Shadow { let Payload::V { shadow, .. } = self; shadow }
+//! }
+//! tailq::adapter!(NodeLink = Node { link, mut payload.V.key: u64 });
+//! ```
+//!
+//! nor with a `DerefMut` that first writes the slot's variant, so that the
+//! payload it reaches lies at the very offset of the variant field
+//! `offset_of!` names:
+//!
+//! ```compile_fail,E0080
+//! #![feature(offset_of_enum, const_trait_impl, const_convert)]
+//! #![allow(non_snake_case, dangerous_implicit_autorefs)]
+//! use core::ops::{Deref, DerefMut};
+//! use tailq::Link;
+//! struct Inner { key: u64 }
+//! struct Shadow { V: Inner }
+//! enum Payload { V { key: &'static u64 }, W { shadow: Shadow } }
+//! struct Node { link: Link, payload: Payload }
+//! const impl Deref for Payload {
+//!     type Target = Shadow;
+//!     fn deref(&self) -> &Shadow {
+//!         match self { Payload::W { shadow } => shadow, Payload::V { .. } => panic!() }
+//!     }
+//! }
+//! const impl DerefMut for Payload {
+//!     fn deref_mut(&mut self) -> &mut Shadow {
+//!         *self = Payload::W { shadow: Shadow { V: Inner { key: 0 } } };
+//!         match self { Payload::W { shadow } => shadow, Payload::V { .. } => panic!() }
+//!     }
+//! }
+//! tailq::adapter!(NodeLink = Node { link, mut payload.V.key: u64 });
 //! ```

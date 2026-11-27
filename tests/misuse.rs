@@ -681,3 +681,199 @@ fn a_queue_with_a_half_relinked_node_is_not_cleared() {
     }
     queue.clear();
 }
+
+/// Gives the last of two nodes on `queue` the forward word of a link that
+/// left a queue, `usize::MAX`, keeping its `prev`, as if it had been half
+/// relinked.
+///
+/// # Safety
+///
+/// The nodes must be live and on no queue.
+unsafe fn half_relinked(nodes: &Nodes, queue: &mut Queue) {
+    // SAFETY: the caller's.  A link is `repr(C)` and starts with its
+    // forward word; writing it is the misuse.
+    unsafe {
+        queue.push_back_ptr(nodes.at(0));
+        queue.push_back_ptr(nodes.at(1));
+        let link = ptr::from_ref(&(*nodes.at(1).as_ptr()).link);
+        link.cast::<usize>().cast_mut().write(usize::MAX);
+    }
+}
+
+/// Review 6: the end checks of a pop, a push and the like refuse a forward
+/// word that marks a link as on no queue, rather than read through it.
+#[test]
+#[should_panic(expected = "tail queue: the link is on no queue")]
+fn a_pop_refuses_a_half_relinked_last_node() {
+    let nodes = Nodes::new(2);
+    let mut queue = ManuallyDrop::new(Queue::new());
+    // SAFETY: the nodes are live, outlive the queue and are on no queue;
+    // the pop is the misuse, caught before it writes anything.
+    unsafe {
+        half_relinked(&nodes, &mut queue);
+        assert!(queue.pop_back_ptr().is_some(), "a node to pop");
+    }
+}
+
+/// Review 6: as above, through a push after the last node.
+#[test]
+#[should_panic(expected = "tail queue: the link is on no queue")]
+fn a_push_refuses_a_half_relinked_last_node() {
+    let nodes = Nodes::new(3);
+    let mut queue = ManuallyDrop::new(Queue::new());
+    // SAFETY: as above.
+    unsafe {
+        half_relinked(&nodes, &mut queue);
+        queue.push_back_ptr(nodes.at(2));
+    }
+}
+
+/// Review 6: a copy of a middle link passes the membership walk, which
+/// reaches the ends through its neighbours, but the queue still links the
+/// original; no cursor rests on it, as no removal takes it.
+#[test]
+#[should_panic(
+    expected = "tail queue: the previous link does not point at this one"
+)]
+fn no_cursor_rests_on_a_moved_node() {
+    let nodes = Nodes::new(4);
+    let (queue, moved) = moved_middle(&nodes);
+    // SAFETY: the copy reads as linked; that it is not on the queue is the
+    // misuse, caught before the cursor reads the node.
+    let cursor = unsafe { queue.cursor_from_ptr(moved) };
+    assert!(cursor.current().is_some(), "unreachable");
+}
+
+/// Review 6: as above, with a cursor that could write the queue.
+#[test]
+#[should_panic(
+    expected = "tail queue: the previous link does not point at this one"
+)]
+fn no_mutable_cursor_rests_on_a_moved_node() {
+    let nodes = Nodes::new(4);
+    let (mut queue, moved) = moved_middle(&nodes);
+    // SAFETY: as above.
+    let mut cursor = unsafe { queue.cursor_mut_from_ptr(moved) };
+    assert!(cursor.remove_current_ptr().is_some(), "unreachable");
+}
+
+/// Review 6: a replacement checks its node at the ghost too, as its Panics
+/// section says, though it links nothing there.
+#[test]
+#[should_panic(expected = "tail queue: the link is already on a queue")]
+fn a_replacement_at_the_ghost_checks_its_node() {
+    let nodes = Nodes::new(2);
+    let mut queue = Queue::new();
+    let mut other = Queue::new();
+    // SAFETY: the nodes are live, outlive the queues and are on no queue
+    // when pushed; the replacement is the misuse.
+    unsafe {
+        queue.push_back_ptr(nodes.at(0));
+        other.push_back_ptr(nodes.at(1));
+        let mut cursor = queue.cursor_front_mut();
+        cursor.move_next();
+        assert!(
+            cursor.replace_current_ptr(nodes.at(1)).is_none(),
+            "the ghost"
+        );
+    }
+}
+
+/// Review 6: as above, in safe code, for a node that a forgotten queue
+/// left marked as on a queue.
+#[test]
+#[should_panic(expected = "tail queue: the link is already on a queue")]
+fn a_safe_replacement_at_the_ghost_checks_its_node() {
+    let mut stray = Node {
+        key: 1,
+        link: Link::new(),
+    };
+    let mut kept = Node {
+        key: 0,
+        link: Link::new(),
+    };
+    // Never dropped, so never marks its node as on no queue.
+    let mut forgotten = ManuallyDrop::new(TailQueue::<'_, NodeLink>::new());
+    forgotten.push_back(&mut stray);
+    let mut queue = TailQueue::<'_, NodeLink>::new();
+    queue.push_back(&mut kept);
+    let mut cursor = queue.cursor_front_mut();
+    cursor.move_next();
+    assert!(cursor.replace_current(&mut stray).is_err(), "the ghost");
+}
+
+// Review 6, mutation testing: each test below fails for a mutant of clear's
+// and drop's check that no other test noticed.  Append to tests/misuse.rs.
+
+/// Pushes the first two nodes onto a queue, then, through a stale copy of
+/// its head, the third: after the last when `after`, before the first
+/// otherwise.  The queue's own links still lead from its first to its
+/// last, every one but one pointing back as it should.
+fn pushed_through_a_stale_head(nodes: &Nodes, after: bool) -> Queue {
+    let mut queue = Queue::new();
+    // SAFETY: the nodes are live and outlive the queues, and each is on no
+    // queue when pushed; the copy of the head is the misuse.
+    unsafe {
+        queue.push_back_ptr(nodes.at(0));
+        queue.push_back_ptr(nodes.at(1));
+        let mut stale = ManuallyDrop::new(ptr::read(&raw const queue));
+        if after {
+            stale.push_back_ptr(nodes.at(2));
+        } else {
+            stale.push_front_ptr(nodes.at(2));
+        }
+    }
+    queue
+}
+
+/// Mutant L04: clearing checks that the walk from the first link ends at
+/// the queue's last.  Here it runs on past the last into a node the stale
+/// head pushed, whose link points back as it should.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_queue_whose_walk_runs_past_its_last_is_not_cleared() {
+    let nodes = Nodes::new(3);
+    let mut queue = pushed_through_a_stale_head(&nodes, true);
+    queue.clear();
+}
+
+/// Mutant L03: clearing checks that every link points back at the one
+/// before it.  Here the first node's points at the node the stale head
+/// pushed before it, while the walk forward still ends at the last.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_queue_whose_first_points_back_at_another_node_is_not_cleared() {
+    let nodes = Nodes::new(3);
+    let mut queue = pushed_through_a_stale_head(&nodes, false);
+    queue.clear();
+}
+
+/// Mutants L03 and L04: dropping either queue writes nothing, so the nodes
+/// that the stale head holds stay marked as linked.
+#[test]
+fn dropping_a_queue_a_stale_head_changed_leaves_its_nodes_alone() {
+    for after in [true, false] {
+        let nodes = Nodes::new(3);
+        drop(pushed_through_a_stale_head(&nodes, after));
+        // SAFETY: the nodes are live, and no queue is left to write them.
+        let linked = |i| unsafe { nodes.at(i).as_ref() }.link.is_linked();
+        assert!((0..3).all(linked), "after: {after}");
+    }
+}
+
+/// Mutant L06: a head with no first link but a last one is corrupt too, as
+/// one whose first word was overwritten is, and is not cleared.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_head_with_a_last_but_no_first_is_not_cleared() {
+    let nodes = Nodes::new(1);
+    let mut queue = Queue::new();
+    // SAFETY: the node is live and outlives the queue, and is on no queue
+    // when pushed.  The head is `repr(C)` and starts with its first link;
+    // zeroing it, to `None`, is the misuse.
+    unsafe {
+        queue.push_back_ptr(nodes.at(0));
+        ptr::from_mut(&mut queue).cast::<usize>().write(0);
+    }
+    queue.clear();
+}

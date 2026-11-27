@@ -91,17 +91,21 @@ and a timeout, after a build without the limit:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --locked --release
+python3 -I .github/check_workflows.py && python3 -I .github/check_limits.py && python3 -I .github/check_limits_test.py
 cargo doc --no-deps --locked
 cargo build --locked --target x86_64-unknown-none
 cargo test --locked --no-run && .github/limit.sh cargo test --locked
 cargo test --locked --release --no-run && .github/limit.sh cargo test --locked --release
+cargo test --locked -p tailq-flip --no-run && .github/limit.sh cargo test --locked -p tailq-flip
 bench="cargo test --locked -p tailq-bench --benches --release"
 $bench --no-run && .github/limit.sh $bench
 nightly=+nightly-2026-10-04
 miri=".github/limit.sh cargo $nightly miri test --locked"
 strict=-Zmiri-strict-provenance
 cargo $nightly miri setup  # Miri's sysroot, built without the limit, which it outgrows
-.github/limit.sh cargo $nightly test --locked --doc
+cargo $nightly build --locked --lib -p tailq -p tailq-flip
+.github/limit.sh cargo $nightly test --locked --doc -p tailq -p tailq-flip
 MIRIFLAGS="$strict -Zmiri-symbolic-alignment-check" $miri
 MIRIFLAGS="$strict -Zmiri-tree-borrows" $miri
 MIRIFLAGS=$strict $miri --release
@@ -120,11 +124,12 @@ Coverage must be complete: every code region of `src/` runs in the tests, in som
 `cargo llvm-cov show-env`.
 
 Every problem a review found has a test: `tests/regressions.rs` names each one, `tests/misuse.rs` holds the misuse
-that debug builds catch, and `src/compile_fail.rs` what must not compile.
+that debug builds catch, and `src/compile_fail.rs` what must not compile. The tests that need `testing/flip/`, a type
+macro whose answer changes from one expansion to the next, live in that crate, so that `tailq` does not depend on it:
+they check that `adapter!` names each type once.
 
 The benches are in their own crate, `bench/`, so that criterion is no dependency of `tailq`: `cargo bench -p
-tailq-bench`. `testing/flip/` is a type macro whose answer changes from one expansion to the next, which the tests
-use to check that `adapter!` names each type once; it has no dependencies.
+tailq-bench`.
 
 CI also packages the crate, builds the library on Rust 1.99.0, the minimum, and lints the Markdown with
 markdownlint-cli2.

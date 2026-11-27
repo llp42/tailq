@@ -11,6 +11,7 @@
     reason = "an integration test crate is itself the test module"
 )]
 
+use core::array;
 use core::mem::size_of;
 use core::mem::{replace, take};
 use core::ptr;
@@ -1174,4 +1175,128 @@ fn last_catches_the_back_node_leaving() {
         (*queue).remove_ptr(NonNull::new_unchecked(base.add(2)));
         let _: Option<NonNull<Node>> = walk.last();
     }
+}
+
+/// Review 6: a cursor borrows its queue, so code that reaches a head by
+/// pointer ends its use of one before it changes the queue, unlike a walk,
+/// which allows removing the node it just handed out.  Here a cursor finds
+/// each node to remove and the one after it, the removal follows, and a
+/// new cursor starts from the one after.
+#[test]
+fn a_cursor_by_pointer_is_done_before_the_queue_changes() {
+    let mut nodes = nodes::<4>();
+    let base = nodes.as_mut_ptr();
+    let mut head = Queue::new();
+    let queue = ptr::from_mut(&mut head);
+    let mut removed = Vec::new();
+    // SAFETY: the nodes are live and unmoved while linked, each pushed
+    // once by a pointer derived from `base`, and every cursor is done with
+    // before the queue changes.
+    unsafe {
+        for i in 0..4 {
+            (*queue).push_back_ptr(NonNull::new_unchecked(base.add(i)));
+        }
+        let mut at = (*queue).front_ptr();
+        while let Some(node) = at {
+            let mut cursor = (*queue).cursor_from_ptr(node);
+            cursor.move_next();
+            at = cursor.current_ptr();
+            if (*node.as_ptr()).key & 1 == 0 {
+                (*queue).remove_ptr(node);
+                removed.push((*node.as_ptr()).key);
+            }
+        }
+    }
+    assert_eq!((removed, keys(&head)), (vec![2, 4], vec![1, 3]));
+}
+
+/// Review 6: debug builds read links an operation does not touch, so a
+/// node's other queues stay unused while one lends its payload, even when
+/// the payload holds their links.  Here the run queue lends a thread's
+/// scheduling state, which holds its link on the queue of every thread,
+/// and that queue is used only once the loan ends.
+#[test]
+fn a_payload_holding_another_queues_link_is_lent_while_that_queue_rests() {
+    struct Thread {
+        run: Link,
+        sched: Sched,
+    }
+
+    struct Sched {
+        all: Link,
+        prio: u32,
+    }
+
+    tailq::adapter!(RunLink = Thread { run, mut sched: Sched });
+    tailq::adapter!(AllLink = Thread { sched.all });
+
+    let mut threads: [Thread; 5] = array::from_fn(|prio| Thread {
+        run: Link::new(),
+        sched: Sched {
+            all: Link::new(),
+            prio: u32::try_from(prio).unwrap_or(u32::MAX),
+        },
+    });
+    let base = threads.as_mut_ptr();
+    let mut all = TailQueue::<'_, AllLink>::new();
+    let mut run = TailQueue::<'_, RunLink>::new();
+    // SAFETY: the threads are live and unmoved while linked, each pushed
+    // onto each queue by the same pointer derived from `base`; the queue
+    // of every thread rests while the run queue lends a payload, and the
+    // borrower stays off the link inside it.
+    unsafe {
+        for i in 0..5 {
+            all.push_back_ptr(NonNull::new_unchecked(base.add(i)));
+        }
+        run.push_back_ptr(NonNull::new_unchecked(base.add(1)));
+        if let Some(sched) = run.front_mut() {
+            sched.prio = sched.prio.wrapping_add(10);
+        }
+        all.remove_ptr(NonNull::new_unchecked(base.add(3)));
+        if let Some(sched) = run.front_mut() {
+            sched.prio = sched.prio.wrapping_add(1);
+        }
+        let prios: Vec<u32> =
+            all.iter().map(|thread| thread.sched.prio).collect();
+        assert_eq!(prios, [0, 12, 2, 4]);
+        run.clear();
+        all.clear();
+    }
+}
+
+// Review 6, mutation testing: each test below fails for a mutant no other
+// test noticed.  Append to tests/regressions.rs.
+
+/// Mutants A09 and A10: every local of the expansion is named so that no
+/// item of the caller's meets it, not only the two the fifth review found.
+/// A local named `at` meets a constant, which a `let` cannot shadow, and
+/// one named `spare` a unit struct.
+#[test]
+#[expect(
+    non_upper_case_globals,
+    non_camel_case_types,
+    reason = "the names the expansion's locals would have without their prefix"
+)]
+fn adapters_meet_no_item_named_like_their_locals() {
+    const at: isize = 0;
+    struct spare;
+
+    struct Keyed {
+        link: Link,
+        key: u32,
+    }
+
+    tailq::adapter!(SpareLink = Keyed { link, mut key: u32 });
+
+    let mut one = Keyed {
+        link: Link::new(),
+        key: 7,
+    };
+    let mut queue = TailQueue::<'_, SpareLink>::new();
+    queue.push_back(&mut one);
+    if let Some(key) = queue.front_mut() {
+        *key = key.wrapping_add(1);
+    }
+    assert_eq!((at, size_of::<spare>()), (0, 0));
+    assert_eq!(queue.front().map(|front| front.key), Some(8));
 }

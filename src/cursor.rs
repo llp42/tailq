@@ -18,6 +18,14 @@ use core::marker::PhantomData;
 use core::ptr::NonNull;
 
 /// A cursor over a shared [`TailQueue`], borrowed for `'head`.
+///
+/// The cursor borrows the queue for as long as it is in use, so the queue
+/// must not change in the meantime, through any pointer.  Code that
+/// reaches a head by pointer, such as one in a `static mut`, ends its use
+/// of a cursor before it changes the queue, and may then start another
+/// on a node with [`cursor_from_ptr`](TailQueue::cursor_from_ptr).  Unlike
+/// an [`IterPtr`], a cursor does not allow even the node it rests on to be
+/// removed while it is in use.
 pub struct Cursor<'head, 'nodes, A: Adapter, C: Count = Uncounted> {
     queue: &'head TailQueue<'nodes, A, C>,
     current: Option<NonNull<Link>>,
@@ -121,6 +129,10 @@ impl<A: Adapter, C: Count> Copy for Cursor<'_, '_, A, C> {}
 
 /// A cursor over an exclusively borrowed [`TailQueue`] that can link and
 /// unlink nodes.
+///
+/// The cursor borrows the queue exclusively for as long as it is in use,
+/// so the queue changes only through it in the meantime, and is not read
+/// through any other pointer either.
 pub struct CursorMut<'head, 'nodes, A: Adapter, C: Count = Uncounted> {
     queue: &'head mut TailQueue<'nodes, A, C>,
     current: Option<NonNull<Link>>,
@@ -349,6 +361,8 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
         node: &'nodes mut A::Node,
     ) -> Result<&'nodes mut A::Node, &'nodes mut A::Node> {
         let Some(at) = self.current else {
+            // SAFETY: a `&mut` allows reads of all of the node.
+            unsafe { check_on_no_queue::<A>(NonNull::from(&*node)) };
             return Err(node);
         };
         // SAFETY: the `'nodes` borrow keeps the node live, unmoved and
@@ -385,7 +399,11 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
         &mut self,
         node: NonNull<A::Node>,
     ) -> Option<NonNull<A::Node>> {
-        let at = self.current?;
+        let Some(at) = self.current else {
+            // SAFETY: the caller keeps the push contract.
+            unsafe { check_on_no_queue::<A>(node) };
+            return None;
+        };
         // SAFETY: the caller keeps the push contract, and the cursor
         // rests on a node of the queue it borrows exclusively.
         unsafe {
@@ -409,6 +427,27 @@ impl<A: Payload, C: Count> CursorMut<'_, '_, A, C> {
         self.current
             .map(|link| unsafe { payload_of::<A>(node_of::<A>(link)).as_mut() })
     }
+}
+
+/// Checks, in debug builds, that the node at `node`, which a replacement
+/// at the ghost hands back, is on no queue, as a replacement at a node
+/// checks the node it links: either panics alike.
+///
+/// # Panics
+///
+/// In debug builds, when the node's link is marked as on a queue.
+///
+/// # Safety
+///
+/// `node` must be valid for reads of its link.
+#[inline]
+unsafe fn check_on_no_queue<A>(node: NonNull<A::Node>)
+where
+    A: Adapter,
+{
+    // SAFETY: the caller's.
+    let linked = unsafe { link_of::<A>(node).as_ref() }.is_linked();
+    debug_assert!(!linked, "tail queue: the link is already on a queue");
 }
 
 /// An iterator over the pointers the nodes of a [`TailQueue`] were
@@ -452,8 +491,10 @@ impl<A: Adapter, C: Count> IterPtr<'_, A, C> {
     }
 
     /// Checks, in debug builds, that the node at `at`, which the walk is
-    /// about to hand out, is still on the queue: the walk contract lets the
-    /// queue lose only the nodes the walk has handed out.
+    /// about to hand out, is still on a queue: the walk contract lets the
+    /// queue lose only the nodes the walk has handed out.  A node that left
+    /// and joined another queue passes, as telling the queues apart would
+    /// walk the queue at every step.
     ///
     /// # Panics
     ///

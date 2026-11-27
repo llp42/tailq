@@ -44,8 +44,10 @@ pub unsafe trait Adapter: Sealed {
 ///
 /// A payload may hold the links of other queues.  A node is on several
 /// queues only through pushes by pointer, and their contract then makes
-/// the caller keep those queues off the node while this one lends its
-/// payload, and keep the payload's borrower off those links.
+/// the caller leave those queues unused while this one lends its payload,
+/// since in debug builds their checks read the links of nodes that the
+/// operation itself does not touch, and keep the payload's borrower off
+/// those links.
 ///
 /// # Safety
 ///
@@ -401,6 +403,15 @@ macro_rules! __adapter {
             // expands again at each paste, maybe to another type, so the
             // checks name the node as `Self::Node`.
             const OFFSET: usize = {
+                // A reference to the field, outside any `unsafe` block:
+                // rejects a path through a union, whose other fields could
+                // leave no link at the offset.  The raw places below sit in
+                // an `unsafe` block, which would let a union field and a
+                // `ManuallyDrop` deref through.
+                let _: for<'__tailq_node> fn(
+                    &'__tailq_node <Self as $crate::Adapter>::Node,
+                ) -> &'__tailq_node $crate::Link =
+                    |__tailq_node| &__tailq_node.$($field).+;
                 // The field's place, through shared derefs only, on a slot
                 // nothing writes: it must lie where `offset_of!` says, which
                 // rejects a path that reaches the link through a deref.

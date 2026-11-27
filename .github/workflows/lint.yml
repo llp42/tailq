@@ -68,3 +68,5 @@ jobs:
       # Every test command on its own under limit.sh, and limit.sh still limiting memory and time: what
       # check_workflows.py, reading whole lines, and nothing else checked.
       - run: python3 -I .github/check_limits.py
+      # check_limits.py fed each case review 5 found, which it would pass on unflagged workflows whatever it read.
+      - run: python3 -I .github/check_limits_test.py

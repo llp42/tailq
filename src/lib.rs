@@ -157,6 +157,45 @@ const unsafe fn prev_of(at: NonNull<Link>) -> Option<NonNull<Link>> {
     unsafe { *(&raw const (*at.as_ptr()).prev).cast::<Option<NonNull<Link>>>() }
 }
 
+/// Returns `slot` as a raw pointer, null for `None`.
+#[cfg(debug_assertions)]
+#[expect(clippy::inline_always, reason = "as for `next_of`")]
+#[inline(always)]
+const fn word(slot: Option<NonNull<Link>>) -> *mut Link {
+    match slot {
+        Some(link) => link.as_ptr(),
+        None => ptr::null_mut(),
+    }
+}
+
+/// Returns the `next` word of the link at `at` as a raw pointer, null for
+/// `None`, as [`next_of`] does.
+///
+/// # Safety
+///
+/// `at` must be the link of a live node.
+#[cfg(debug_assertions)]
+#[expect(clippy::inline_always, reason = "as for `next_of`")]
+#[inline(always)]
+const unsafe fn next_word(at: *mut Link) -> *mut Link {
+    // SAFETY: the link is live, a `Cell` has the layout of its value, and
+    // `Option<NonNull<T>>` that of `*mut T`.
+    unsafe { *(&raw const (*at).next).cast::<*mut Link>() }
+}
+
+/// Returns the `prev` word of the link at `at`, as [`next_word`] does.
+///
+/// # Safety
+///
+/// `at` must be the link of a live node.
+#[cfg(debug_assertions)]
+#[expect(clippy::inline_always, reason = "as for `next_of`")]
+#[inline(always)]
+const unsafe fn prev_word(at: *mut Link) -> *mut Link {
+    // SAFETY: as for `next_word`.
+    unsafe { *(&raw const (*at).prev).cast::<*mut Link>() }
+}
+
 /// The field a node embeds to join one [`TailQueue`].
 ///
 /// Two words: the next node's link, and the previous node's, `None`
@@ -766,6 +805,12 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         // SAFETY: the link is on this queue, and the previous node is live.
         let own = unsafe { link.prev_link() }
             .map_or(self.first, |prev| unsafe { prev.as_ref() }.next.get());
+        // A copy of a middle link passes the membership walk; the queue
+        // still links the original.
+        debug_assert!(
+            is(own, at),
+            "tail queue: the previous link does not point at this one",
+        );
         own.unwrap_or(at)
     }
 
@@ -862,7 +907,10 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
             let prev = unsafe { prev_of(at) };
             assert!(prev.is_some(), "tail queue: the link is on no queue");
             // SAFETY: as above.
-            match unsafe { next_of(at) } {
+            let ahead = unsafe { next_of(at) };
+            // A link that left a queue: its forward word is `NOWHERE`.
+            assert!(!is(ahead, NOWHERE), "tail queue: the link is on no queue");
+            match ahead {
                 // SAFETY: a link on a queue has a live next node.
                 Some(next) => assert!(
                     is(unsafe { prev_of(next) }, at),
@@ -1067,28 +1115,30 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// consistent with its neighbours and the last is this queue's, without
     /// panicking.
     #[cfg(debug_assertions)]
+    #[expect(
+        clippy::cmp_null,
+        reason = "`is_null` is a call in unoptimised builds"
+    )]
     fn links_hold(&self) -> bool {
-        let mut before = NOWHERE;
-        let mut at = self.first;
-        while let Some(link) = at {
+        // The words compared as raw pointers, null for `None`: in
+        // unoptimised builds a match on each `Option` costs more than the
+        // walk's loads.
+        let nowhere = NOWHERE.as_ptr();
+        let last = word(self.last);
+        let mut before = nowhere;
+        let mut at = word(self.first);
+        while at != ptr::null_mut() {
             // SAFETY: a node stays live while it is on the queue, and the
             // walk stops at the first link that does not hold.
-            let (prev, next) = unsafe { (prev_of(link), next_of(link)) };
-            if !is(prev, before) {
+            let (prev, next) = unsafe { (prev_word(at), next_word(at)) };
+            // A link that left a queue: its forward word is `NOWHERE`.
+            if prev != before || next == nowhere {
                 return false;
             }
-            match next {
-                None => return is(self.last, link),
-                // A link that left a queue: its forward word is `NOWHERE`.
-                Some(after) if after.as_ptr() == NOWHERE.as_ptr() => {
-                    return false;
-                }
-                Some(_) => {}
-            }
-            before = link;
+            before = at;
             at = next;
         }
-        self.last.is_none()
+        before == last || (before == nowhere && last == ptr::null_mut())
     }
 
     /// Marks every node's link as on no queue and empties the queue.
