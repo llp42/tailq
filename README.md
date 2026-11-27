@@ -116,8 +116,8 @@ MIRIFLAGS=$strict $miri --target i686-unknown-linux-gnu
 MIRIFLAGS="$strict -Zmiri-tree-borrows" $miri --target s390x-unknown-linux-gnu
 ```
 
-`Cargo.toml` denies every warning, and Clippy's pedantic and nursery groups, so these checks need no flags. CI runs
-them on the toolchains pinned in `.github/actions/setup-rust` and `.github/workflows/test.yml`.
+`Cargo.toml` denies every warning, and Clippy's pedantic, nursery and cargo groups, so these checks need no flags. CI
+runs them on the toolchains pinned in `.github/actions/setup-rust` and `.github/workflows/test.yml`.
 The no_std build needs its target: `rustup target add x86_64-unknown-none`. The doctests run on nightly as well,
 because only nightly rustdoc checks the error code of a `compile_fail` block. Miri runs on a 32-bit and a big-endian
 target too, and runs the thread tests under sixteen seeds, one process each.
