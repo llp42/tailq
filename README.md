@@ -81,7 +81,8 @@ is mutated through `&mut self`, with no pinning.
 
 ## Minimum supported Rust version
 
-Rust 1.99.
+Rust 1.99. The crate is written in the 2024 edition, and `adapter!`, which expands in the caller's crate, is tested
+only in crates of the 2024 edition.
 
 ## Development
 

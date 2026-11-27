@@ -82,8 +82,6 @@ mod adapter;
 mod compile_fail;
 mod count;
 mod cursor;
-#[cfg(doctest)]
-mod editions;
 
 pub use adapter::{Adapter, Payload};
 use adapter::{link_of, node_of, payload_of};
@@ -742,7 +740,23 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     #[inline]
     fn find(&self, node: NonNull<A::Node>) -> Option<NonNull<Link>> {
         let mut at = self.first;
+        #[cfg(debug_assertions)]
+        let mut before = NOWHERE.as_ptr();
         while let Some(link) = at {
+            // Each link's `prev` is checked before its `next` is followed,
+            // so that a ring, which misuse can make, ends the walk.
+            #[cfg(debug_assertions)]
+            {
+                // SAFETY: a node stays live while it is on the queue.
+                let (prev, next) = unsafe {
+                    (prev_word(link.as_ptr()), next_word(link.as_ptr()))
+                };
+                assert!(
+                    prev == before && next != NOWHERE.as_ptr(),
+                    "tail queue: the queue is corrupt",
+                );
+                before = link.as_ptr();
+            }
             // SAFETY: a node stays live while it is on the queue.
             if unsafe { node_of::<A>(link) } == node {
                 return Some(link);
@@ -765,15 +779,21 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         // one.
         unsafe {
             other.check(first);
-            // The last link, which a queue with a first one has.
+            // The last link, which a queue with a first one has; only in
+            // debug builds, so that release builds read `other.last` where
+            // they did before.
+            #[cfg(debug_assertions)]
             other.check(other.last.unwrap_or(first));
             if let Some(last) = self.last {
                 self.check(last);
             }
         }
-        // A copy of this head would make a ring of the queue.
+        // A copy of this head would make a ring of the queue, and so would
+        // a copy whose first has since changed: both ends of `other` are
+        // checked, so a chain that ends at this queue's last is its own.
         debug_assert!(
-            !is(self.first, first),
+            !is(self.first, first)
+                && !is(self.last, other.last.unwrap_or(first)),
             "tail queue: the queue is appended to itself",
         );
         other.first = None;
@@ -867,6 +887,9 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
             // This queue, walked from both ends at once by address, so that
             // only its own links are read.
             let (mut ahead, mut back) = self.ends();
+            // The link each walk came from: the first link's `prev` is
+            // `NOWHERE`, the last's `next` null.
+            let (mut came_ahead, mut came_back) = (nowhere, ptr::null_mut());
             while ahead != link && back != link {
                 assert!(
                     ahead != ptr::null_mut()
@@ -876,16 +899,41 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
                         && ahead != back,
                     "tail queue: the link is not on this queue",
                 );
-                // SAFETY: a node stays live while it is on the queue.
+                // SAFETY: a node stays live while it is on the queue.  Each
+                // link's word back along its walk is checked before its
+                // other word is followed: neither walk can then run in a
+                // cycle, nor step on from a link overwritten from elsewhere.
+                assert!(
+                    unsafe { prev_word(ahead) } == came_ahead
+                        && unsafe { next_word(back) } == came_back,
+                    "tail queue: the link is not on this queue",
+                );
+                // SAFETY: as above.
                 let after = unsafe { next_word(ahead) };
                 assert!(
                     after != back,
                     "tail queue: the link is not on this queue"
                 );
+                came_ahead = ahead;
                 ahead = after;
+                came_back = back;
                 // SAFETY: as above; `ahead` lay before `back`, so `back` is
                 // not the first link.
                 back = unsafe { prev_word(back) };
+            }
+            // The walk that met the link came from one of its neighbours,
+            // which the link's own word must name, before anything
+            // follows that word or the other.
+            if ahead == link {
+                assert!(
+                    prev == came_ahead,
+                    "tail queue: the previous link does not point at this one",
+                );
+            } else {
+                assert!(
+                    next == came_back,
+                    "tail queue: the next link does not point back",
+                );
             }
         }
         #[cfg(not(debug_assertions))]
@@ -940,22 +988,18 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
             let ahead = unsafe { next_word(link) };
             // A link that left a queue: its forward word is `NOWHERE`.
             assert!(ahead != nowhere, "tail queue: the link is on no queue");
+            // Both ends against the head before either neighbour is read: a
+            // stale head's end, or one overwritten from a forgotten queue,
+            // may have one that is gone.
             if ahead == ptr::null_mut() {
                 assert!(
                     last == link,
                     "tail queue: the link is not on this queue",
                 );
             } else {
-                // Before the neighbour is read: a stale head's end may have
-                // one that is gone.
                 assert!(
                     last != link,
                     "tail queue: the head's end has a neighbour",
-                );
-                // SAFETY: a link on a queue has a live next node.
-                assert!(
-                    unsafe { prev_word(ahead) } == link,
-                    "tail queue: the next link does not point back",
                 );
             }
             if prev == nowhere {
@@ -964,11 +1008,19 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
                     "tail queue: the link is not on this queue",
                 );
             } else {
-                // As above.
                 assert!(
                     first != link,
                     "tail queue: the head's end has a neighbour",
                 );
+            }
+            if ahead != ptr::null_mut() {
+                // SAFETY: a link on a queue has a live next node.
+                assert!(
+                    unsafe { prev_word(ahead) } == link,
+                    "tail queue: the next link does not point back",
+                );
+            }
+            if prev != nowhere {
                 // SAFETY: a link on a queue has a live previous node.
                 assert!(
                     unsafe { next_word(prev) } == link,

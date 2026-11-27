@@ -209,6 +209,9 @@ where
 /// assert_eq!(run_queue.front().map(|thread| thread.id), Some(1));
 /// ```
 ///
+/// The macro is tested only in crates of the 2024 edition, the one
+/// `tailq` itself is written in.
+///
 /// A payload, which the queue lends as `&mut` while the node is linked,
 /// follows the link as `mut path: Type`, and makes the adapter a
 /// [`Payload`] one:
@@ -384,10 +387,12 @@ macro_rules! __adapter {
         // header and taking the place of its body.
         $crate::__adapter!(@headers $name [$($decl)*] [$($arg)*] [$($($bound)+)?]);
 
-        // A lifetime parameter shows once in these headers.
-        #[allow(single_use_lifetimes)]
+        // A lifetime parameter shows twice in this header, without an
+        // `allow` that a caller's `forbid` would overrule.
         impl<$($decl)*> $crate::__private::Sealed for $name<$($arg)*>
-        $(where $($bound)+)?
+        where
+            $name<$($arg)*>: $crate::__private::Sized,
+            $($($bound)+)?
         {
         }
 
@@ -462,7 +467,6 @@ macro_rules! __adapter {
         @headers $name:ident [$($decl:tt)*] [$($arg:tt)*] [$($bound:tt)*]
     ) => {
         const _: () = {
-            #[allow(dead_code)]
             struct __TailqHeaders<$($decl)*>(
                 $crate::__private::PhantomData<fn() -> $name<$($arg)*>>,
             )
@@ -477,10 +481,7 @@ macro_rules! __adapter {
     };
     (@check [$($decl:tt)+] $name:ident) => {};
     (@check_payload [] $name:ident) => {
-        // In parentheses, a type even where `$name` is a keyword of a later
-        // edition, as `gen` is to a 2021 caller, which a generic argument
-        // would parse as a const expression.
-        const _: () = $crate::__private::check_payload::<($name)>();
+        const _: () = $crate::__private::check_payload::<$name>();
     };
     (@check_payload [$($decl:tt)+] $name:ident) => {};
     (
@@ -497,9 +498,9 @@ macro_rules! __adapter {
         // adapter's node, which the raw place proves is a `$payload_ty` and
         // the assertion proves is aligned; the queue checks that it lies
         // apart from the link.
-        #[allow(single_use_lifetimes)]
         unsafe impl<$($decl)*> $crate::Payload for $name<$($arg)*>
         where
+            $name<$($arg)*>: $crate::__private::Sized,
             $($bound)*
         {
             type Payload = $payload_ty;

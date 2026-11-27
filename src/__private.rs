@@ -9,7 +9,7 @@ pub use crate::adapter::check_payload;
 // `$crate`: a path `::core::...` would resolve in the caller's crate,
 // which can put a crate of its own under that name.
 pub use core::convert::Infallible;
-pub use core::marker::PhantomData;
+pub use core::marker::{PhantomData, Sized};
 pub use core::mem::{MaybeUninit, offset_of};
 
 use crate::Link;
