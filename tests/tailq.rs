@@ -13,7 +13,7 @@ use core::convert::Infallible;
 use core::marker::PhantomData;
 use core::mem::{offset_of, size_of, swap, take, zeroed};
 use core::ptr::NonNull;
-use tailq::{Adapter, Counted, Field, Link, TailQueue};
+use tailq::{Adapter, Counted, Link, TailQueue};
 
 /// A node on one queue.
 struct Node {
@@ -21,11 +21,13 @@ struct Node {
     link: Link,
 }
 
-tailq::queue!(Queue<'nodes> = Node { link });
+tailq::adapter!(NodeLink = Node { link });
 
-/// The counted queue through the same field, named in full.
-type CountedQueue<'nodes> =
-    TailQueue<'nodes, Field<Node, { offset_of!(Node, link) }>, Counted>;
+/// A queue of nodes.
+type Queue<'nodes> = TailQueue<'nodes, NodeLink>;
+
+/// The counted queue through the same field.
+type CountedQueue<'nodes> = TailQueue<'nodes, NodeLink, Counted>;
 
 const fn node(key: u32) -> Node {
     Node {
@@ -397,8 +399,13 @@ struct Shared {
     all: Link,
 }
 
-tailq::queue!(Ready<'nodes> = Shared { ready });
-tailq::queue!(All<'nodes> = Shared { all });
+tailq::adapter!(ReadyLink = Shared { ready });
+tailq::adapter!(AllLink = Shared { all });
+
+/// The nodes ready to go.
+type Ready<'nodes> = TailQueue<'nodes, ReadyLink>;
+/// Every node.
+type All<'nodes> = TailQueue<'nodes, AllLink>;
 
 #[test]
 fn one_node_rides_two_queues() {
@@ -488,6 +495,27 @@ fn hand_written_adapter_links_a_generic_node() {
     let ids: Vec<u32> = queue.iter().map(|thread| thread.id).collect();
     assert_eq!(ids, [2, 1, 0]);
     assert_eq!(Pc::NAME, "pc");
+}
+
+tailq::adapter!(
+    SchedLink<P> = Thread<P> { sched.link } where P: Platform
+);
+
+#[test]
+fn adapter_links_a_generic_node_through_a_nested_field() {
+    let mut threads: Vec<Thread<Pc>> = (0..3)
+        .map(|id| Thread {
+            id,
+            platform: PhantomData,
+            sched: Sched { link: Link::new() },
+        })
+        .collect();
+    let mut queue = TailQueue::<SchedLink<Pc>>::new();
+    for thread in &mut threads {
+        queue.push_back(thread);
+    }
+    let ids: Vec<u32> = queue.iter().rev().map(|thread| thread.id).collect();
+    assert_eq!(ids, [2, 1, 0]);
 }
 
 #[test]

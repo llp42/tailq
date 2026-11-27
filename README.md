@@ -24,14 +24,15 @@ queue never allocates or frees. The crate is `no_std` and needs no
   that a pushed link is on no queue.
 
 ```rust
-use tailq::Link;
+use tailq::{Link, TailQueue};
 
 struct Thread {
     id: u32,
     link: Link,
 }
 
-tailq::queue!(RunQueue<'nodes> = Thread { link });
+tailq::adapter!(RunLink = Thread { link });
+type RunQueue<'nodes> = TailQueue<'nodes, RunLink>;
 
 let mut first = Thread { id: 1, link: Link::new() };
 let mut second = Thread { id: 2, link: Link::new() };
@@ -43,20 +44,24 @@ let ids: Vec<u32> = run_queue.iter().map(|thread| thread.id).collect();
 assert_eq!(ids, [2, 1]);
 ```
 
-`queue!` declares the queue type for a node type and the field that
-links it. Without a lifetime the type is `TailQueue<'static, _>`, for
-heads in statics whose nodes are pushed by pointer. A trailing `counted`
-keeps the length:
+`adapter!` declares the type that links a node type through one of its
+fields, and a queue type names it. A trailing `Counted` parameter keeps
+the length. A generic node takes the adapter's type parameters, with
+their bounds in a `where`:
 
 ```rust
-tailq::queue!(pub RunQueue = Thread { run_queue_node });
-tailq::queue!(pub Frames = Frame { link }, counted);
+tailq::adapter!(pub RunLink = Thread { run_queue_node });
+pub type RunQueue<'nodes> = TailQueue<'nodes, RunLink>;
+pub type Frames<'nodes> = TailQueue<'nodes, FrameLink, Counted>;
 
-static mut RUN_QUEUE: RunQueue = RunQueue::new();
+tailq::adapter!(pub SchedLink<P> = Thread<P> { sched.link } where P: Platform);
+
+static RUN_QUEUE: Mutex<RunQueue<'static>> = Mutex::new(RunQueue::new());
 ```
 
-One node can sit on several queues at once by embedding one `Link` per
-queue. Generic nodes implement the `Adapter` trait by hand.
+The field must be a `Link` itself: one that only derefs to a link, or
+sits in a packed node, fails to compile. One node can sit on several
+queues at once by embedding one `Link` per queue, each with its adapter.
 
 Nothing points into the head: the first node's link holds a marker in
 its place. So a head moves like any other value, full or empty, and it

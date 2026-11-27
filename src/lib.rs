@@ -6,14 +6,15 @@
 //! never allocates or frees.  The crate is `no_std` and needs no `alloc`.
 //!
 //! ```
-//! use tailq::Link;
+//! use tailq::{Link, TailQueue};
 //!
 //! struct Thread {
 //!     id: u32,
 //!     link: Link,
 //! }
 //!
-//! tailq::queue!(RunQueue<'nodes> = Thread { link });
+//! tailq::adapter!(RunLink = Thread { link });
+//! type RunQueue<'nodes> = TailQueue<'nodes, RunLink>;
 //!
 //! let mut first = Thread { id: 1, link: Link::new() };
 //! let mut second = Thread { id: 2, link: Link::new() };
@@ -28,9 +29,9 @@
 //! assert!(next.is_some_and(|thread| thread.id == 2 && !thread.link.is_linked()));
 //! ```
 //!
-//! [`queue!`] declares a queue type for a node type and the field that
-//! links it; one node joins several queues at once through several
-//! fields.
+//! [`adapter!`] declares the [`Adapter`] that links a node type through
+//! one of its fields, and a queue type names it; one node joins several
+//! queues at once through several fields.
 //!
 //! The head holds the first node's link and the last node's.  Each node's
 //! link holds the next node's link and the previous node's, or, for the
@@ -77,7 +78,7 @@ mod adapter;
 mod count;
 mod cursor;
 
-pub use adapter::{Adapter, Field, LinkAt};
+pub use adapter::Adapter;
 pub use count::{Count, Counted, Uncounted};
 pub use cursor::{Cursor, CursorMut, Iter, IterPtr};
 

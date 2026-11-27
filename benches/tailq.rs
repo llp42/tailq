@@ -23,7 +23,7 @@ use criterion::measurement::WallTime;
 use criterion::{
     BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main,
 };
-use tailq::Link;
+use tailq::{Link, TailQueue};
 
 const CHURN_OPS: usize = 256;
 const CHURN_STRIDE: usize = 7919;
@@ -48,7 +48,10 @@ struct Node {
     link: Link,
 }
 
-tailq::queue!(Queue<'nodes> = Node { link });
+tailq::adapter!(NodeLink = Node { link });
+
+/// A queue of nodes.
+type Queue<'nodes> = TailQueue<'nodes, NodeLink>;
 
 const fn node(key: u64) -> Node {
     Node {
