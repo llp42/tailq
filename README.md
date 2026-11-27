@@ -26,7 +26,9 @@ queue never allocates or frees. The crate is `no_std` and needs no
   compile time that the payload lies apart from the link.
 - Debug builds check, before an operation writes anything, that each
   link it touches is consistent with its neighbours, that a node named
-  by address is on this queue, and that a pushed link is on no queue.
+  by address is on this queue, and that a pushed link is on no queue,
+  on a queue whose links are as its operations left them: `unsafe` code
+  that corrupts a queue may get past them.
   `contains_ptr` and `cursor_mut_find_ptr` look a node up by address
   in safe code.
 - A counted queue's iterators are `ExactSizeIterator`.

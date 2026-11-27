@@ -1379,3 +1379,66 @@ fn heads_walks_and_cursors_print_their_own_links() {
     let rest = format!("{:?}", queue.cursor_back());
     assert!(has(&rest, &[("current", last)]), "{rest}");
 }
+
+/// A task owned by pointer, which leaves its queue when it is dropped.
+struct Task {
+    key: u32,
+    link: Link,
+    /// The queue the task may be on, reached by pointer.
+    queue: *mut TailQueue<'static, TaskLink>,
+}
+
+tailq::adapter!(TaskLink = Task { link });
+
+impl Drop for Task {
+    fn drop(&mut self) {
+        let task = NonNull::from(&mut *self);
+        // SAFETY: the queue outlives every task, and `task` comes from the
+        // `Box` rebuilt from the pointer the task was pushed with.
+        unsafe {
+            if (*self.queue).contains_ptr(task) {
+                (*self.queue).remove_ptr(task);
+            }
+        }
+    }
+}
+
+/// A node can take itself off its queue while it is borrowed as `&mut`,
+/// as its `Drop` borrows it: `contains_ptr` and `remove_ptr`, given that
+/// node, reach it only through the pointer given, and the lookup's debug
+/// check does not read the link it finds.  Here each of three tasks on
+/// the heap, first, middle and last, is freed through the `Box` rebuilt
+/// from its push pointer while it is linked, and the other two stay in
+/// order.
+#[test]
+fn a_node_borrowed_by_its_drop_looks_itself_up_and_leaves() {
+    for at in 0..3 {
+        let mut head = TailQueue::<'static, TaskLink>::new();
+        let queue = ptr::from_mut(&mut head);
+        let tasks: Vec<NonNull<Task>> = (0..3)
+            .map(|key| {
+                NonNull::from(Box::leak(Box::new(Task {
+                    key,
+                    link: Link::new(),
+                    queue,
+                })))
+            })
+            .collect();
+        // SAFETY: each task is live, on no queue when pushed, and reached
+        // only through its push pointer until the `Box` rebuilt from it
+        // frees it; the queue is reached only through `queue`.
+        unsafe {
+            for &task in &tasks {
+                (*queue).push_back_ptr(task);
+            }
+            drop(Box::from_raw(tasks[at].as_ptr()));
+            let left: Vec<u32> = (*queue).iter().map(|task| task.key).collect();
+            let mut keys = vec![0, 1, 2];
+            keys.remove(at);
+            assert_eq!(left, keys);
+            while let Some(task) = (*queue).pop_front_ptr() {
+                drop(Box::from_raw(task.as_ptr()));
+            }
+        }
+    }
+}

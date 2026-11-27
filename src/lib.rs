@@ -71,7 +71,9 @@
 //! point back at it, that a link at either end is this queue's, that a
 //! node named by address is on this queue, and that a pushed link is on
 //! no queue; they also fill a leaving link's forward word with an address
-//! no link can have.
+//! no link can have.  They catch these mistakes on a queue whose links are
+//! as its operations left them: `unsafe` code that corrupts a queue, with a
+//! stale copy of its head or an overwritten link, may get past them.
 
 #![no_std]
 
@@ -507,8 +509,18 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// If the queue is dropped while it holds the node, the node must
     /// still be live then.  A node that leaves as `&'nodes mut A::Node`
     /// becomes that reference, so then `node` must have been made from a
-    /// `&mut` or `*mut` to the whole node, and nothing else may access the
-    /// node for as long as the reference is used.
+    /// `&mut` or `*mut` to the whole node, the node must stay live for all
+    /// of `'nodes`, as the reference's lifetime says, and nothing else may
+    /// access the node for as long as the reference is used.
+    ///
+    /// A `&mut` to the whole node, whether a queue handed it out or the
+    /// caller made it from `node`, as a `Drop` of a boxed node does, keeps
+    /// every queue the node is still on unused for as long as it is used:
+    /// their operations, and in debug builds their checks, read the links
+    /// of nodes they do not change.  Only [`remove_ptr`](Self::remove_ptr)
+    /// and [`contains_ptr`](Self::contains_ptr), given that node, reach it
+    /// through `node` alone or not at all, so a node borrowed so can still
+    /// look itself up and leave a queue.
     #[inline]
     pub unsafe fn push_front_ptr(&mut self, node: NonNull<A::Node>) {
         // SAFETY: the caller keeps the push contract.
@@ -742,11 +754,17 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         #[cfg(debug_assertions)]
         let mut before = NOWHERE.as_ptr();
         while let Some(link) = at {
+            // SAFETY: a node stays live while it is on the queue.
+            if unsafe { node_of::<A>(link) } == node {
+                return Some(link);
+            }
             // Each link's `prev` is checked before its `next` is followed,
-            // so that a ring, which misuse can make, ends the walk.
+            // so that a ring, which misuse can make, ends the walk.  The
+            // link found is not read, as a `&mut` to its node may be in
+            // use.
             #[cfg(debug_assertions)]
             {
-                // SAFETY: a node stays live while it is on the queue.
+                // SAFETY: as above.
                 let (prev, next) = unsafe {
                     (prev_word(link.as_ptr()), next_word(link.as_ptr()))
                 };
@@ -755,10 +773,6 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
                     "tail queue: the queue is corrupt",
                 );
                 before = link.as_ptr();
-            }
-            // SAFETY: a node stays live while it is on the queue.
-            if unsafe { node_of::<A>(link) } == node {
-                return Some(link);
             }
             // SAFETY: as above.
             at = unsafe { link.as_ref() }.next.get();
