@@ -683,7 +683,7 @@ fn a_forgotten_head_leaves_its_nodes_marked() {
 
 /// `adapter!` takes a lifetime parameter named `'node` and a type named
 /// `Headers` in its bounds: the macro's own binder and check item are
-/// named so that no caller's name meets them.
+/// named with the prefix `__tailq`, which the macro reserves.
 #[test]
 fn adapters_take_any_names() {
     trait Marked<Mark> {}
@@ -1090,8 +1090,8 @@ fn backward_walks_cost_what_forward_ones_do() {
 
 /// `adapter!` compiles beside a constant named `node` and a unit struct
 /// named `slot`, which a `let` or a closure's parameter cannot shadow: the
-/// expansion's locals are named so that no caller's name meets them, as
-/// its binder and check item are in `adapters_take_any_names`.
+/// expansion's locals are named with the prefix `__tailq`, which the macro
+/// reserves, as its binder and check item are in `adapters_take_any_names`.
 #[test]
 #[expect(
     non_upper_case_globals,
@@ -1306,8 +1306,8 @@ fn a_payload_holding_another_queues_link_is_lent_while_that_queue_rests() {
     }
 }
 
-/// Every local of the expansion is named so that no item of the caller's
-/// meets it, not only `node` and `slot`.  A local named `at` would meet a
+/// Every local of the expansion is named with the prefix `__tailq`, which
+/// the macro reserves, not only `node` and `slot`.  A local named `at` would meet a
 /// constant, which a `let` cannot shadow, and one named `spare` a unit
 /// struct.
 #[test]

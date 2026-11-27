@@ -210,7 +210,10 @@ where
 /// ```
 ///
 /// The macro is tested only in crates of the 2024 edition, the one
-/// `tailq` itself is written in.
+/// `tailq` itself is written in.  It names what it takes from `core`
+/// through `$crate`, and its own locals, lifetimes and items with the
+/// prefix `__tailq`, which it reserves: a caller's item, constant or
+/// lifetime of such a name may clash with them.
 ///
 /// Doc comments, `#[doc = ...]` and `#[doc(...)]`, with `doc` spelled
 /// plain, are the only attributes the adapter takes, since the items the
