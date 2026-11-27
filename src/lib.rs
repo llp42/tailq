@@ -865,17 +865,18 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     }
 
     /// Checks, in debug builds, that a counted queue whose last node is
-    /// leaving counts that one node, as a stale copy of its head that took
-    /// a node off would leave it counting more.
+    /// leaving counts that one node, and that one keeping a node counts
+    /// more, as a stale copy of its head that took a node off or linked one
+    /// would leave it counting otherwise.
     ///
     /// # Panics
     ///
-    /// In debug builds, when `empties` and the queue counts other than one
-    /// node.
+    /// In debug builds, when the queue counts one node and keeps one, or
+    /// another number and `empties`.
     #[inline]
     fn check_count(&self, empties: bool) {
         debug_assert!(
-            !empties || self.count.exact().is_none_or(|left| left == 1),
+            self.count.exact().is_none_or(|left| (left == 1) == empties),
             "tail queue: the queue is corrupt",
         );
     }
@@ -941,6 +942,11 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
                 // SAFETY: as above; `ahead` lay before `back`, so `back` is
                 // not the first link.
                 back = unsafe { prev_word(back) };
+                // The mark of a link on no queue: a stale head.
+                assert!(
+                    back != ptr::null_mut(),
+                    "tail queue: the queue is corrupt"
+                );
             }
         }
         #[cfg(not(debug_assertions))]

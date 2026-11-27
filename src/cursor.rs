@@ -589,6 +589,10 @@ impl<A: Adapter, C: Count> Iterator for IterPtr<'_, A, C> {
         self.left.sub_one();
         if is(self.back, at) {
             // The ends met on the last node left.
+            debug_assert!(
+                self.left.exact().is_none_or(|left| left == 0),
+                "tail queue: the queue is corrupt",
+            );
             self.finish();
         } else {
             // SAFETY: a node stays live while it is on the queue.  Read
@@ -706,6 +710,10 @@ impl<A: Adapter, C: Count> DoubleEndedIterator for IterPtr<'_, A, C> {
         self.left.sub_one();
         if is(self.front, at) {
             // As in `next`, from the other end.
+            debug_assert!(
+                self.left.exact().is_none_or(|left| left == 0),
+                "tail queue: the queue is corrupt",
+            );
             self.finish();
         } else {
             // SAFETY: as in `next`, from the other end: `at` is not the

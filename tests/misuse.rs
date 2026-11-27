@@ -727,6 +727,75 @@ fn a_counted_queue_does_not_empty_by_removal_with_a_count_left() {
     }
 }
 
+/// The membership walk refuses the `prev` of a link that left, the mark of
+/// a link on no queue.  Here a stale copy of a head of five nodes, kept
+/// after the queue popped its last, removes the second: the walk from the
+/// back reads the mark of the node that left before the walk from the
+/// front meets the second.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_stale_head_whose_last_left_removes_nothing() {
+    let nodes = Nodes::new(5);
+    let mut queue = Queue::new();
+    // SAFETY: the nodes are live and outlive the queue, and each is on no
+    // queue when pushed.
+    unsafe {
+        for i in 0..5 {
+            queue.push_back_ptr(nodes.at(i));
+        }
+    }
+    // SAFETY: a head is plain pointers, and the copy is never dropped.
+    let mut stale = ManuallyDrop::new(unsafe { ptr::read(&raw const queue) });
+    assert!(queue.pop_back_ptr().is_some(), "five nodes");
+    // SAFETY: the misuse: the copy is not the queue.
+    unsafe { stale.remove_ptr(nodes.at(1)) };
+}
+
+/// A counted queue that keeps a node counts more than one.  Here a stale
+/// copy of a counted head of two nodes links a third between them, so the
+/// queue counts two over three, and the second pop from the front would
+/// leave one node counting none.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_counted_queue_does_not_keep_a_node_it_does_not_count() {
+    let nodes = Nodes::new(3);
+    let mut queue = CountedQueue::new();
+    // SAFETY: the nodes are live and outlive the queue, and each is on no
+    // queue when pushed; the copy linking a node is the misuse.
+    unsafe {
+        queue.push_back_ptr(nodes.at(0));
+        queue.push_back_ptr(nodes.at(2));
+        let mut stale = ManuallyDrop::new(ptr::read(&raw const queue));
+        stale
+            .cursor_mut_from_ptr(nodes.at(0))
+            .insert_after_ptr(nodes.at(1));
+    }
+    assert!(queue.pop_front_ptr().is_some(), "three nodes");
+    assert!(queue.pop_front_ptr().is_none(), "unreachable");
+}
+
+/// A counted walk whose ends meet has nothing left to count.  Here the
+/// walk runs from the front over a queue that counts three over two nodes,
+/// after a stale copy of its head took the middle one off.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_counted_walk_from_the_front_ends_with_nothing_left_to_count() {
+    let nodes = Nodes::new(3);
+    let queue = counted_with_one_taken_by_a_copy(&nodes);
+    let mut walk = queue.iter_ptr();
+    while walk.next().is_some() {}
+}
+
+/// As above, from the back.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_counted_walk_from_the_back_ends_with_nothing_left_to_count() {
+    let nodes = Nodes::new(3);
+    let queue = counted_with_one_taken_by_a_copy(&nodes);
+    let mut walk = queue.iter_ptr();
+    while walk.next_back().is_some() {}
+}
+
 /// Clearing a queue checks every link before it writes any, so a corrupt
 /// queue does not walk into another.  Here the first node of `queue` holds
 /// the bytes of the first of `other`.
