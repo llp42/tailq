@@ -70,3 +70,5 @@ jobs:
       - run: python3 -I .github/check_limits.py
       # check_limits.py fed each case review 5 found, which it would pass on unflagged workflows whatever it read.
       - run: python3 -I .github/check_limits_test.py
+      # check_workflows.py fed what review 7's mutants found it passed, and test.yml's flip, doctest and package steps.
+      - run: python3 -I .github/check_workflows_test.py

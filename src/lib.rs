@@ -411,8 +411,12 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// # Safety
     ///
     /// `node` must be on this queue, and derived from the pointer it was
-    /// pushed with, as the pointers the queue returns are.  The cursor then
-    /// reaches the node through the pointer it was pushed with itself.
+    /// pushed with, as the pointers the queue returns are, with access to
+    /// read the node's link, which this reads through `node`: a pointer
+    /// taken from a `&mut A::Payload` the queue lent reaches only the
+    /// payload and will not do, while one taken from a `&A::Node` will.
+    /// The cursor then reaches the node through the pointer it was pushed
+    /// with itself.
     #[must_use]
     #[inline]
     pub unsafe fn cursor_from_ptr(
@@ -453,8 +457,12 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// # Safety
     ///
     /// `node` must be on this queue, and derived from the pointer it was
-    /// pushed with, as the pointers the queue returns are.  The cursor then
-    /// reaches the node through the pointer it was pushed with itself.
+    /// pushed with, as the pointers the queue returns are, with access to
+    /// read the node's link, which this reads through `node`: a pointer
+    /// taken from a `&mut A::Payload` the queue lent reaches only the
+    /// payload and will not do, while one taken from a `&A::Node` will.
+    /// The cursor then reaches the node through the pointer it was pushed
+    /// with itself.
     #[must_use]
     #[inline]
     pub unsafe fn cursor_mut_from_ptr(
@@ -691,7 +699,11 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// # Safety
     ///
     /// `node` must be on this queue, and derived from the pointer it was
-    /// pushed with, as the pointers the queue returns are.
+    /// pushed with, as the pointers the queue returns are, with access to
+    /// read and write the node's link, which this does through `node`: a
+    /// pointer taken from a `&mut A::Payload` the queue lent reaches only
+    /// the payload and will not do, while one taken from a `&A::Node` will,
+    /// since a link's words are cells.
     #[inline]
     pub unsafe fn remove_ptr(&mut self, node: NonNull<A::Node>) {
         // SAFETY: the caller puts the node on this queue.
@@ -881,8 +893,10 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     }
 
     /// Checks, in debug builds, that the link `at` is on a queue, that its
-    /// neighbours point back at it, and that at either end it is this
-    /// queue's.
+    /// neighbours point back at it, and that it is at an end of this queue
+    /// exactly when the head names it there: a head that is not the
+    /// queue's own, such as a stale copy, names as an end a link with a
+    /// neighbour beyond it.
     ///
     /// # Panics
     ///
@@ -899,38 +913,63 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
             reason = "the check compiles out of release builds"
         )
     )]
+    #[cfg_attr(
+        debug_assertions,
+        expect(
+            clippy::cmp_null,
+            reason = "`is_null` is a call in unoptimised builds"
+        )
+    )]
     #[inline]
     unsafe fn check(&self, at: NonNull<Link>) {
         #[cfg(debug_assertions)]
         {
+            // The words compared as raw pointers, null for `None`, as in
+            // `links_hold`: in unoptimised builds a match on each `Option`
+            // costs more than the loads.
+            let nowhere = NOWHERE.as_ptr();
+            let link = at.as_ptr();
             // SAFETY: the node is live.
-            let prev = unsafe { prev_of(at) };
-            assert!(prev.is_some(), "tail queue: the link is on no queue");
+            let prev = unsafe { prev_word(link) };
+            assert!(
+                prev != ptr::null_mut(),
+                "tail queue: the link is on no queue"
+            );
             // SAFETY: as above.
-            let ahead = unsafe { next_of(at) };
+            let ahead = unsafe { next_word(link) };
             // A link that left a queue: its forward word is `NOWHERE`.
-            assert!(!is(ahead, NOWHERE), "tail queue: the link is on no queue");
-            match ahead {
+            assert!(ahead != nowhere, "tail queue: the link is on no queue");
+            if ahead == ptr::null_mut() {
+                assert!(
+                    word(self.last) == link,
+                    "tail queue: the link is not on this queue",
+                );
+            } else {
                 // SAFETY: a link on a queue has a live next node.
-                Some(next) => assert!(
-                    is(unsafe { prev_of(next) }, at),
+                assert!(
+                    unsafe { prev_word(ahead) } == link,
                     "tail queue: the next link does not point back",
-                ),
-                None => assert!(
-                    is(self.last, at),
-                    "tail queue: the link is not on this queue",
-                ),
+                );
+                assert!(
+                    word(self.last) != link,
+                    "tail queue: the head's end has a neighbour",
+                );
             }
-            match prev {
-                // SAFETY: a link on a queue has a live previous node.
-                Some(before) if before.as_ptr() != NOWHERE.as_ptr() => assert!(
-                    is(unsafe { next_of(before) }, at),
-                    "tail queue: the previous link does not point at this one",
-                ),
-                _ => assert!(
-                    is(self.first, at),
+            if prev == nowhere {
+                assert!(
+                    word(self.first) == link,
                     "tail queue: the link is not on this queue",
-                ),
+                );
+            } else {
+                // SAFETY: a link on a queue has a live previous node.
+                assert!(
+                    unsafe { next_word(prev) } == link,
+                    "tail queue: the previous link does not point at this one",
+                );
+                assert!(
+                    word(self.first) != link,
+                    "tail queue: the head's end has a neighbour",
+                );
             }
         }
         #[cfg(not(debug_assertions))]

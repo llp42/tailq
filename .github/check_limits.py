@@ -86,7 +86,7 @@ def check_limit_script() -> list[str]:
 
 
 def check_lint_job() -> list[str]:
-    """lint.yml still runs both checks: a job that lost them would pass with them."""
+    """lint.yml still runs the checks and their self-tests: a job that lost them would pass with them."""
     runs = [
         step.get("run", "")
         for job in yaml.safe_load((GITHUB / "workflows/lint.yml").read_text())["jobs"].values()
@@ -94,7 +94,7 @@ def check_lint_job() -> list[str]:
     ]
     return [
         f"lint.yml no longer runs {script}"
-        for script in ("check_workflows.py", "check_limits.py")
+        for script in ("check_workflows.py", "check_limits.py", "check_workflows_test.py", "check_limits_test.py")
         if not any(f"python3 -I .github/{script}" in run for run in runs)
     ]
 

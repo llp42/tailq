@@ -92,7 +92,7 @@ and a timeout, after a build without the limit:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked
 cargo clippy --workspace --all-targets --locked --release
-python3 -I .github/check_workflows.py && python3 -I .github/check_limits.py && python3 -I .github/check_limits_test.py
+for check in check_workflows check_workflows_test check_limits check_limits_test; do python3 -I .github/$check.py; done
 cargo doc --no-deps --locked
 cargo build --locked --target x86_64-unknown-none
 cargo test --locked --no-run && .github/limit.sh cargo test --locked

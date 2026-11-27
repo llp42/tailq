@@ -456,7 +456,7 @@ fn a_count_is_one_word() {
 }
 
 // Review 3, mutation testing: each test below fails for a mutant no other
-// test noticed.  Append to tests/regressions.rs.
+// test noticed.
 
 /// Mutants M02 and M03: the membership walk debug builds run for a node
 /// named by address goes toward both ends at once, so a node next to
@@ -754,7 +754,7 @@ fn a_walk_by_pointer_may_mix_ends_while_removing_what_it_hands_out() {
 }
 
 // Review 4, mutation testing and requirement audit: each test below fails
-// for a mutant no other test noticed.  Append to tests/regressions.rs.
+// for a mutant no other test noticed.
 
 /// A node whose payload lies four bytes past a multiple of the link's
 /// alignment.
@@ -891,7 +891,7 @@ fn a_payload_reached_through_a_deref_fails_its_check() {
 }
 
 // Review 5, mutation testing: each test below fails for a mutant no other
-// test noticed.  Append to tests/regressions.rs.
+// test noticed.
 
 /// Mutants I06 and I07: a walk over a head reached by pointer may move the
 /// node it has just handed out to another queue, which is what BSD's
@@ -1008,7 +1008,7 @@ fn last_and_a_counted_count_take_constant_time() {
 }
 
 // Review 5, requirement audit: the performance problem the fourth round's
-// review found had no test.  Append to tests/regressions.rs.
+// review found had no test.
 
 /// The fourth round's performance review, fixed in f3ac729: at sixteen
 /// nodes the third and fourth rounds' steps made `rfold` up to half again
@@ -1082,8 +1082,8 @@ fn backward_walks_cost_what_forward_ones_do() {
     );
 }
 
-// Review 5: fails to compile until the expansion's locals are renamed (see
-// fix_names.diff).  Append to tests/regressions.rs.
+// Review 5: the expansion's locals are named so that no item of the
+// caller's meets them.
 
 /// The locals of the expansion, `slot` and `node`, met a constant or a unit
 /// struct of the caller's of those names, which a `let` or a closure's
@@ -1265,7 +1265,7 @@ fn a_payload_holding_another_queues_link_is_lent_while_that_queue_rests() {
 }
 
 // Review 6, mutation testing: each test below fails for a mutant no other
-// test noticed.  Append to tests/regressions.rs.
+// test noticed.
 
 /// Mutants A09 and A10: every local of the expansion is named so that no
 /// item of the caller's meets it, not only the two the fifth review found.
@@ -1299,4 +1299,107 @@ fn adapters_meet_no_item_named_like_their_locals() {
     }
     assert_eq!((at, size_of::<spare>()), (0, 0));
     assert_eq!(queue.front().map(|front| front.key), Some(8));
+}
+
+/// Review 7: a node named by address is reached through the pointer given,
+/// which must reach its link: one taken from a `&Node` does, as a link's
+/// words are cells, and so does one saved from the push, while one taken
+/// from a lent `&mut` payload reaches the payload only.  Here a walk by
+/// pointer removes what it hands out through each of the first two.
+#[test]
+fn a_walk_by_pointer_removes_through_a_pointer_that_reaches_the_link() {
+    for backward in [false, true] {
+        let mut nodes = nodes::<4>();
+        let base = nodes.as_mut_ptr();
+        let mut head = Queue::new();
+        let queue = ptr::from_mut(&mut head);
+        // SAFETY: the nodes are live and unmoved while linked, each pushed
+        // once by a pointer derived from `base`, and the walk removes only
+        // the node it just handed out, through a pointer taken from the
+        // shared node it handed out.
+        unsafe {
+            for i in 0..4 {
+                (*queue).push_back_ptr(NonNull::new_unchecked(base.add(i)));
+            }
+            let take = |node: &Node| {
+                if node.key & 1 == 0 {
+                    (*queue).remove_ptr(NonNull::from(node));
+                }
+            };
+            if backward {
+                (*queue).iter().rev().for_each(take);
+            } else {
+                (*queue).iter().for_each(take);
+            }
+        }
+        assert_eq!(keys(&head), [1, 3], "backward: {backward}");
+    }
+    for backward in [false, true] {
+        let mut nodes = nodes::<4>();
+        let base = nodes.as_mut_ptr();
+        let mut head = Queue::new();
+        let queue = ptr::from_mut(&mut head);
+        // SAFETY: as above, through the pointers saved from the pushes,
+        // while the payload the walk lent is no longer used.
+        unsafe {
+            let saved: Vec<NonNull<Node>> = (0..4)
+                .map(|i| NonNull::new_unchecked(base.add(i)))
+                .collect();
+            for &node in &saved {
+                (*queue).push_back_ptr(node);
+            }
+            let take = |key: &mut u32| {
+                let odd = *key & 1 == 1;
+                let at = usize::try_from(*key).unwrap_or(0).wrapping_sub(1);
+                *key = key.wrapping_add(10);
+                if let Some(&node) = saved.get(at).filter(|_| odd) {
+                    (*queue).remove_ptr(node);
+                }
+            };
+            if backward {
+                (*queue).iter_mut().rev().for_each(take);
+            } else {
+                (*queue).iter_mut().for_each(take);
+            }
+        }
+        assert_eq!(keys(&head), [12, 14], "backward: {backward}");
+    }
+}
+
+// Review 7, mutation testing: the test below fails for mutants no other
+// test noticed.
+
+/// Mutants D1 and D3: a head, a walk and a cursor print the links they
+/// hold, each under its own name: a head its first and last, a walk its
+/// front and back, a cursor the link it rests on.  Nothing read more than
+/// the head's count and the type names.
+#[test]
+fn heads_walks_and_cursors_print_their_own_links() {
+    let mut nodes = nodes::<3>();
+    // Only printed, never read through.
+    let [first, middle, last] =
+        nodes.each_ref().map(|node| Some(NonNull::from(&node.link)));
+    let queue: Queue<'_> = nodes.iter_mut().collect();
+    let has = |shown: &str, fields: &[(&str, Option<NonNull<Link>>)]| {
+        fields
+            .iter()
+            .all(|&(name, link)| shown.contains(&format!("{name}: {link:?}")))
+    };
+    let head = format!("{queue:?}");
+    assert!(has(&head, &[("first", first), ("last", last)]), "{head}");
+    let mut walk = queue.iter_ptr();
+    let ends = format!("{walk:?}");
+    assert!(has(&ends, &[("front", first), ("back", last)]), "{ends}");
+    assert!(walk.next().is_some() && walk.next_back().is_some());
+    let met = format!("{walk:?}");
+    assert!(has(&met, &[("front", middle), ("back", middle)]), "{met}");
+    let mut by_ref = queue.iter();
+    assert!(by_ref.next_back().is_some());
+    let stepped = format!("{by_ref:?}");
+    assert!(
+        has(&stepped, &[("front", first), ("back", middle)]),
+        "{stepped}"
+    );
+    let rest = format!("{:?}", queue.cursor_back());
+    assert!(has(&rest, &[("current", last)]), "{rest}");
 }

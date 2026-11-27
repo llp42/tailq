@@ -460,7 +460,11 @@ where
 /// node the walk has just handed out, from either end, as BSD's
 /// `TAILQ_FOREACH_SAFE` allows: each step reads its next link before it
 /// hands a node out.  Any other change while the walk is in use, such as
-/// removing a node it has not handed out yet, is undefined behaviour.
+/// removing a node it has not handed out yet, is undefined behaviour.  An
+/// [`IterMut`] lends each payload it hands out for as long as that is used,
+/// and such code takes no other reference to that node from the queue
+/// meanwhile, through [`front`](TailQueue::front), a walk, a cursor or a
+/// payload, as safe code cannot.
 pub struct IterPtr<'head, A: Adapter, C: Count = Uncounted> {
     front: Option<NonNull<Link>>,
     back: Option<NonNull<Link>>,

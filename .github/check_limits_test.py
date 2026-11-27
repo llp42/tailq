@@ -79,7 +79,8 @@ def check_lint_jobs(scratch: pathlib.Path) -> list[str]:
         found = check_limits.check_lint_job()
     finally:
         check_limits.GITHUB = real
-    return [] if found == ["lint.yml no longer runs check_limits.py"] else [f"check_limits.py found {found}"]
+    want = [f"lint.yml no longer runs {script}" for script in ("check_limits.py", "check_workflows_test.py", "check_limits_test.py")]
+    return [] if found == want else [f"check_limits.py found {found}"]
 
 
 def main() -> int:

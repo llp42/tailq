@@ -505,8 +505,12 @@ macro_rules! __adapter {
             // As for the link, `$payload_ty` is pasted once, above, and
             // `$node` only here, to check that it is the adapter's node.
             const PAYLOAD_OFFSET: usize = {
-                let _: fn(*mut <Self as $crate::Adapter>::Node) -> *mut $node =
-                    |__tailq_node| __tailq_node;
+                // Not a coercion site, which would let `*mut Node` unsize
+                // to `*mut dyn Trait`: the two types must be equal.
+                let _: $crate::__private::PhantomData<*mut $node> =
+                    $crate::__private::PhantomData::<
+                        *mut <Self as $crate::Adapter>::Node,
+                    >;
                 // A reference to the field: rejects a path through a union,
                 // whose other fields could leave the payload invalid.
                 let _: for<'__tailq_node> fn(

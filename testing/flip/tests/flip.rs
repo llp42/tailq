@@ -73,7 +73,6 @@ fn an_adapter_measures_the_node_it_declares() {
 }
 
 // Review 6, mutant A13: a payload adapter's node type is pasted once too.
-// Append to tests/flip.rs.
 
 /// A payload node whose link and payload are not at its start.
 #[repr(C)]

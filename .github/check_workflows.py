@@ -37,7 +37,11 @@ def packages(line: str) -> tuple[str | None, frozenset[str]]:
     """The toolchain of the cargo command on a line, and the packages it names, tailq when it names none."""
     words = line[line.index("cargo") :].split()
     toolchain = next((word for word in words if word.startswith("+")), None)
-    named = frozenset(after for word, after in zip(words, words[1:]) if word in {"-p", "--package"})
+    named = frozenset(after for word, after in zip(words, words[1:]) if word in {"-p", "--package"}) | frozenset(
+        word.removeprefix("--package=").removeprefix("-p")
+        for word in words
+        if word.startswith("--package=") or (word.startswith("-p") and word != "-p" and not word.startswith("--"))
+    )
     return toolchain, named or frozenset({"tailq"})
 
 

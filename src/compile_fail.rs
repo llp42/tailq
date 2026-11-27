@@ -664,3 +664,45 @@
 //! }
 //! tailq::adapter!(NodeLink = Node { link, mut payload.V.key: u64 });
 //! ```
+//!
+//! Review 7: called directly, the payload rule checks that its node is the
+//! adapter's without a coercion, which would let the node's pointer unsize
+//! to one to a trait object:
+//!
+//! ```compile_fail,E0308
+//! use tailq::Link;
+//! struct Node { link: Link, key: u64 }
+//! tailq::adapter!(NodeLink = Node { link });
+//! tailq::__adapter!(@payload NodeLink [] [] [] dyn core::any::Any, [key: u64]);
+//! ```
+//!
+//! Review 7 found these rejected, and pins them.  On nightly, a link or a
+//! payload in a field that is unsafe to reach, which only the reference
+//! taken outside the macro's `unsafe` block rejects:
+//!
+//! ```compile_fail,E0133
+//! #![feature(unsafe_fields)]
+//! #![allow(incomplete_features)]
+//! use tailq::Link;
+//! struct Node { tag: u64, unsafe link: Link }
+//! tailq::adapter!(NodeLink = Node { link });
+//! ```
+//!
+//! ```compile_fail,E0133
+//! #![feature(unsafe_fields)]
+//! #![allow(incomplete_features)]
+//! use tailq::Link;
+//! struct Node { link: Link, unsafe key: u64 }
+//! tailq::adapter!(NodeLink = Node { link, mut key: u64 });
+//! ```
+//!
+//! A generic packed node, whose layout the alignment check cannot see
+//! until a queue names its parameter, which the reference to its link
+//! rejects where it is declared:
+//!
+//! ```compile_fail,E0793
+//! use tailq::Link;
+//! #[repr(C, packed)]
+//! struct Node<T: Copy> { t: T, link: Link }
+//! tailq::adapter!(NodeLink<T> = Node<T> { link } where T: Copy);
+//! ```

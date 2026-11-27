@@ -338,8 +338,7 @@ fn a_caught_membership_check_leaves_both_queues_as_they_were() {
 }
 
 // Review 3, mutation testing: each test below fails when one debug check is
-// left out, which no other test noticed.  Append to tests/misuse.rs, and add
-// `use core::mem::ManuallyDrop;` to its imports.
+// left out, which no other test noticed.
 
 /// Mutant M01: the membership walk reaches the far end of another queue's
 /// back half first, and must check that end too.
@@ -581,7 +580,7 @@ fn no_queue_is_appended_with_an_overwritten_first_node() {
 }
 
 // Review 4, mutation testing: each test below fails for a mutant of a debug
-// check that no other test noticed.  Append to tests/misuse.rs.
+// check that no other test noticed.
 
 /// Mutant C01: a stale head that pops a node which already left is caught
 /// before the check reads the leaving link's poisoned forward word.
@@ -803,7 +802,7 @@ fn a_safe_replacement_at_the_ghost_checks_its_node() {
 }
 
 // Review 6, mutation testing: each test below fails for a mutant of clear's
-// and drop's check that no other test noticed.  Append to tests/misuse.rs.
+// and drop's check that no other test noticed.
 
 /// Pushes the first two nodes onto a queue, then, through a stale copy of
 /// its head, the third: after the last when `after`, before the first
@@ -876,4 +875,116 @@ fn a_head_with_a_last_but_no_first_is_not_cleared() {
         ptr::from_mut(&mut queue).cast::<usize>().write(0);
     }
     queue.clear();
+}
+
+/// Review 7: the end checks ran one way only, from a link that says it is
+/// at an end to the head.  A stale head whose last has gained a successor
+/// pushed after it, cutting off the queue's later nodes.
+#[test]
+#[should_panic(expected = "tail queue: the head's end has a neighbour")]
+fn a_stale_head_does_not_push_after_a_last_that_has_a_successor() {
+    let nodes = Nodes::new(4);
+    // SAFETY: the nodes are live, outlive the queues and are on no queue
+    // when pushed; the push through the stale head is the misuse, caught
+    // before it writes anything.
+    unsafe {
+        let (mut queue, mut stale) = stale_copy(&nodes);
+        queue.push_back_ptr(nodes.at(2));
+        stale.push_back_ptr(nodes.at(3));
+    }
+}
+
+/// Review 7: as above, through a pop from a stale head whose first has
+/// gained a predecessor.
+#[test]
+#[should_panic(expected = "tail queue: the head's end has a neighbour")]
+fn a_stale_head_does_not_pop_a_first_that_has_a_predecessor() {
+    let nodes = Nodes::new(3);
+    // SAFETY: as above.
+    unsafe {
+        let (mut queue, mut stale) = stale_copy(&nodes);
+        queue.push_front_ptr(nodes.at(2));
+        assert!(stale.pop_front_ptr().is_some(), "unreachable");
+    }
+}
+
+/// Review 7: as above, for each end of a stale head, through a push at the
+/// front and a pop at the back.
+#[test]
+fn a_stale_head_is_caught_at_either_end() {
+    for front in [true, false] {
+        let nodes = Nodes::new(4);
+        let caught = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: as above.
+            unsafe {
+                let (mut queue, mut stale) = stale_copy(&nodes);
+                if front {
+                    queue.push_front_ptr(nodes.at(2));
+                    stale.push_front_ptr(nodes.at(3));
+                } else {
+                    queue.push_back_ptr(nodes.at(2));
+                    assert!(stale.pop_back_ptr().is_some(), "unreachable");
+                }
+            }
+        }));
+        assert!(caught.is_err(), "front: {front}");
+    }
+}
+
+/// Review 7: as above, through an append onto a stale head.
+#[test]
+#[should_panic(expected = "tail queue: the head's end has a neighbour")]
+fn a_stale_head_takes_no_append() {
+    let nodes = Nodes::new(4);
+    let mut other = Queue::new();
+    // SAFETY: as above.
+    unsafe {
+        let (mut queue, mut stale) = stale_copy(&nodes);
+        queue.push_back_ptr(nodes.at(2));
+        other.push_back_ptr(nodes.at(3));
+        stale.append(&mut other);
+    }
+}
+
+// Review 7, mutation testing: each test below fails for a mutant of clear's
+// and drop's check that no other test noticed.
+
+/// Pushes the one node onto a queue and zeroes the head's last link, to
+/// `None`, keeping its first.
+///
+/// # Safety
+///
+/// The node must be live, outlive the queue and be on no queue.
+unsafe fn first_but_no_last(nodes: &Nodes) -> Queue {
+    let mut queue = Queue::new();
+    // SAFETY: the caller's.  The head is `repr(C)`, its last link second;
+    // zeroing it is the misuse.
+    unsafe {
+        queue.push_back_ptr(nodes.at(0));
+        ptr::from_mut(&mut queue).cast::<usize>().add(1).write(0);
+    }
+    queue
+}
+
+/// Mutant W5: a head with a first link but no last is corrupt, as one with
+/// a last but no first is, and is not cleared: the walk from its first
+/// must end at its last, which `None` is not.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_head_with_a_first_but_no_last_is_not_cleared() {
+    let nodes = Nodes::new(1);
+    // SAFETY: the node is live, outlives the queue and is on no queue.
+    let mut queue = unsafe { first_but_no_last(&nodes) };
+    queue.clear();
+}
+
+/// Mutant W5: as above, dropping such a head writes nothing, so its node
+/// stays marked as linked.
+#[test]
+fn dropping_a_head_with_a_first_but_no_last_leaves_its_node_alone() {
+    let nodes = Nodes::new(1);
+    // SAFETY: as above.
+    drop(unsafe { first_but_no_last(&nodes) });
+    // SAFETY: the node is live, and no queue is left to write it.
+    assert!(unsafe { nodes.at(0).as_ref() }.link.is_linked());
 }
