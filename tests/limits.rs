@@ -13,6 +13,8 @@
 
 use std::env;
 use std::fs;
+use std::iter;
+use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -44,16 +46,18 @@ fn tests_run_under_a_memory_limit_and_a_timeout() {
     let command =
         fs::read_to_string(format!("/proc/{parent}/cmdline")).unwrap();
     let words: Vec<&str> = command.split('\0').collect();
-    // Any other spelling could set a signal that ends nothing, or a kill
-    // delay `timeout` reads as the duration.
-    let seconds = match words.as_slice() {
-        [program, "--kill-after=10", seconds, ..]
+    // `timeout` itself, or a script of that name its interpreter runs, as
+    // Fedora's coreutils-single installs it, then its options exactly as
+    // limit.sh writes them: any other spelling could set a signal that ends
+    // nothing, or a kill delay `timeout` reads as the duration.
+    let seconds = words.windows(3).take(3).find_map(|window| match window {
+        [program, "--kill-after=10", seconds]
             if Path::new(program).file_name() == Some("timeout".as_ref()) =>
         {
             seconds.parse::<u64>().ok()
         }
         _ => None,
-    };
+    });
     assert!(
         seconds.is_some_and(|seconds| (1..=SECONDS).contains(&seconds)),
         "a test runs under {words:?}, not a timeout of at most {SECONDS} seconds: run it through .github/limit.sh",
@@ -75,11 +79,19 @@ fn check(mut command: Command) -> Output {
     output
 }
 
+/// The path of `limit.sh`.
+const LIMIT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/.github/limit.sh");
+
 /// Runs the check under `wrapper`, a `sh -c` script that runs `"$0" "$@"`,
-/// and returns whether it passed.
+/// with `$LIMIT` the path of `limit.sh`, and returns whether it passed.
 fn passes_under(wrapper: &str) -> bool {
+    passes_under_limit(wrapper, Path::new(LIMIT))
+}
+
+/// As [`passes_under`], with `limit` as `$LIMIT`.
+fn passes_under_limit(wrapper: &str, limit: &Path) -> bool {
     let mut command = Command::new("sh");
-    let _: &mut Command = command.arg("-c").arg(wrapper);
+    let _: &mut Command = command.arg("-c").arg(wrapper).env("LIMIT", limit);
     check(command).status.success()
 }
 
@@ -93,15 +105,14 @@ fn passes_under(wrapper: &str) -> bool {
 /// nothing.
 #[test]
 fn the_check_takes_limit_sh_and_nothing_looser() {
-    let limit = concat!(env!("CARGO_MANIFEST_DIR"), "/.github/limit.sh");
     for seconds in ["60", "600"] {
         let wrapper =
-            format!("LIMIT_SECONDS={seconds} exec {limit} \"$0\" \"$@\"");
+            format!("LIMIT_SECONDS={seconds} exec \"$LIMIT\" \"$0\" \"$@\"");
         assert!(passes_under(&wrapper), "the check refuses {wrapper}");
     }
     for seconds in ["0", "601", "299.5"] {
         let wrapper =
-            format!("LIMIT_SECONDS={seconds} exec {limit} \"$0\" \"$@\"");
+            format!("LIMIT_SECONDS={seconds} exec \"$LIMIT\" \"$0\" \"$@\"");
         assert!(!passes_under(&wrapper), "the check passes under {wrapper}");
     }
     for timeout in [
@@ -141,7 +152,7 @@ fn the_check_fails_under_a_parent_that_only_bears_the_name() {
 
 /// Reads every workflow for the `LIMIT_SECONDS` it gives `limit.sh`, which
 /// the Miri runs would set out of this check's sight, since it does not
-/// run under Miri: each must be a whole number of at most 600 seconds.
+/// run under Miri: each must be a whole number from 1 to 600 seconds.
 #[test]
 fn every_workflow_keeps_the_timeout_within_ten_minutes() {
     let workflows =
@@ -150,11 +161,15 @@ fn every_workflow_keeps_the_timeout_within_ten_minutes() {
         let path = entry.unwrap().path();
         for line in fs::read_to_string(&path).unwrap().lines() {
             if let Some((_, value)) = line.split_once("LIMIT_SECONDS") {
-                let value = value.trim_start_matches([':', '=', ' ', '"']);
-                let digits: String =
-                    value.chars().take_while(char::is_ascii_digit).collect();
+                let value = value
+                    .trim_start_matches([':', '=', ' ', '"'])
+                    .split(|c: char| c.is_whitespace() || c == '"')
+                    .next()
+                    .unwrap_or_default();
                 assert!(
-                    digits.parse::<u64>().is_ok_and(|value| value <= SECONDS),
+                    value
+                        .parse::<u64>()
+                        .is_ok_and(|value| (1..=SECONDS).contains(&value)),
                     "{} runs tests under {}, more than {SECONDS} seconds",
                     path.display(),
                     line.trim(),
@@ -162,4 +177,78 @@ fn every_workflow_keeps_the_timeout_within_ten_minutes() {
             }
         }
     }
+}
+
+/// Runs the check under `limit.sh` reached through a path with a space, a
+/// copy of it in a directory named `limits copy`: the wrappers name it
+/// quoted, as `"$LIMIT"`, so the check passes as it does in any checkout.
+#[test]
+fn the_check_takes_limit_sh_from_a_path_with_a_space() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("limits copy {}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let limit = dir.join("limit.sh");
+    let _: u64 = fs::copy(LIMIT, &limit).unwrap();
+    let passed = passes_under_limit(
+        "LIMIT_SECONDS=60 exec \"$LIMIT\" \"$0\" \"$@\"",
+        &limit,
+    );
+    fs::remove_dir_all(&dir).unwrap();
+    assert!(passed, "the check refuses limit.sh at {}", limit.display());
+}
+
+/// A `timeout` that is a script, run by its interpreter, as Fedora's
+/// `coreutils-single` installs `/usr/bin/timeout`, a script that reads
+/// `#!/usr/bin/coreutils --coreutils-prog-shebang=timeout`.  It runs its
+/// command and ends it after its duration, as `timeout` does.
+const SCRIPT_TIMEOUT: &str = "#!/usr/bin/python3 -I
+import subprocess, sys
+kill_after = float(sys.argv[1].removeprefix('--kill-after='))
+child = subprocess.Popen(sys.argv[3:])
+try:
+    sys.exit(child.wait(float(sys.argv[2])))
+except subprocess.TimeoutExpired:
+    child.terminate()
+    try:
+        child.wait(kill_after)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait()
+    sys.exit(124)
+";
+
+/// Puts a `timeout` that is a script first on the `PATH`, and runs through
+/// `limit.sh` a `sleep` of ten seconds, which it ends after one, then the
+/// check, under a timeout of a minute: the check passes, as it does under
+/// `limit.sh` with any `timeout` the `PATH` finds, though the parent's
+/// command line then starts with the script's interpreter.
+#[test]
+fn the_check_takes_limit_sh_with_a_timeout_that_is_a_script() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("script-timeout-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let timeout = dir.join("timeout");
+    fs::write(&timeout, SCRIPT_TIMEOUT).unwrap();
+    fs::set_permissions(&timeout, fs::Permissions::from_mode(0o755)).unwrap();
+    let search = env::var_os("PATH").unwrap_or_default();
+    let path = env::join_paths(
+        iter::once(dir.clone()).chain(env::split_paths(&search)),
+    )
+    .unwrap();
+    let ended = Command::new(LIMIT)
+        .args(["sleep", "10"])
+        .env("PATH", &path)
+        .env("LIMIT_SECONDS", "1")
+        .status()
+        .unwrap();
+    let mut command = Command::new(LIMIT);
+    let _: &mut Command = command.env("PATH", &path).env("LIMIT_SECONDS", "60");
+    let output = check(command);
+    fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(ended.code(), Some(124), "the script ends no command");
+    assert!(
+        output.status.success(),
+        "the check refuses limit.sh with a timeout that is a script: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
 }
