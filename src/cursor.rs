@@ -510,7 +510,10 @@ where
 /// head by pointer, such as one in a `static mut`, may still remove the
 /// node the walk has just handed out, from either end, as BSD's
 /// `TAILQ_FOREACH_SAFE` allows: each step reads its next link before it
-/// hands a node out.  The node removed so may then be freed once nothing
+/// hands a node out.  The removal comes between two steps, as from the
+/// loop that drives the walk: one from another thread must happen before
+/// the walk's next step, through a lock both take or the like, since a
+/// step reads the links of the nodes around the one it hands out.  The node removed so may then be freed once nothing
 /// holds the reference the walk handed out to it.  A walk driven from
 /// inside, through [`for_each`](Iterator::for_each),
 /// [`fold`](Iterator::fold), [`try_fold`](Iterator::try_fold) or a method
