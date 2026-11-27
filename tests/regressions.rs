@@ -6,11 +6,6 @@
 //! of them fail only there.  The misuse that debug builds catch is in
 //! `misuse.rs`, and what must not compile is in `src/compile_fail.rs`.
 
-#![expect(
-    clippy::tests_outside_test_module,
-    reason = "an integration test crate is itself the test module"
-)]
-
 use core::array;
 use core::mem::size_of;
 use core::mem::{replace, take};

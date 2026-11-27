@@ -8,10 +8,6 @@
 
 #![no_std]
 #![forbid(unsafe_code)]
-#![expect(
-    clippy::tests_outside_test_module,
-    reason = "an integration test crate is itself the test module"
-)]
 
 // The macro must not resolve anything through this crate: if its
 // expansion named `::std`, this crate would be used and the expectation

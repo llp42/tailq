@@ -69,7 +69,7 @@ pub unsafe trait Payload: Adapter {
 ///
 /// `node` must point at a live node.
 #[inline]
-pub(crate) const unsafe fn link_of<A>(node: NonNull<A::Node>) -> NonNull<Link>
+pub const unsafe fn link_of<A>(node: NonNull<A::Node>) -> NonNull<Link>
 where
     A: Adapter,
 {
@@ -83,7 +83,7 @@ where
 ///
 /// `link` must be the link of a live node.
 #[inline]
-pub(crate) const unsafe fn node_of<A>(link: NonNull<Link>) -> NonNull<A::Node>
+pub const unsafe fn node_of<A>(link: NonNull<Link>) -> NonNull<A::Node>
 where
     A: Adapter,
 {
@@ -117,9 +117,7 @@ where
 ///
 /// `node` must point at a live node.
 #[inline]
-pub(crate) const unsafe fn payload_of<A>(
-    node: NonNull<A::Node>,
-) -> NonNull<A::Payload>
+pub const unsafe fn payload_of<A>(node: NonNull<A::Node>) -> NonNull<A::Payload>
 where
     A: Payload,
 {
