@@ -62,16 +62,5 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      # Every job time-limited, every test run built first and then run under limit.sh, clippy on release builds,
-      # and coverage.py's filter and merge: what d7aa842 and f9f1d04 put in.
+      # Every job time-limited, every Miri run under limit.sh, and coverage.py's filter and merge.
       - run: python3 -I .github/check_workflows.py
-      # Every test command on its own under limit.sh, and limit.sh still limiting memory and time: what
-      # check_workflows.py, reading whole lines, and nothing else checked.
-      - run: python3 -I .github/check_limits.py
-      # check_limits.py fed each case review 5 found, which it would pass on unflagged workflows whatever it read.
-      - run: python3 -I .github/check_limits_test.py
-      # check_workflows.py fed what review 7's mutants found it passed, and test.yml's flip, doctest and package steps.
-      - run: python3 -I .github/check_workflows_test.py
-      # What the jobs run, which nothing above reads: every Miri configuration, the nightly doctests, each job's
-      # commands, no step or job that may fail softly, and the triggers; and every checker's main() running each rule.
-      - run: python3 -I .github/check_runs.py

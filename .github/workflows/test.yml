@@ -12,8 +12,9 @@ concurrency:
   group: test-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
-# Every test runs through .github/limit.sh: at most 512 MiB of data memory and a timeout. Each job builds first,
-# without the limit, and then runs what it built under it.
+# Every test binary runs through .github/limit.sh, the runner .cargo/config.toml names: at most 512 MiB of data
+# memory and a timeout, after cargo builds it without the limit. Miri runs its own runner, so it runs under limit.sh
+# as a whole, after a build without it.
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -23,25 +24,20 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           targets: x86_64-unknown-none
-      - run: cargo test --locked --no-run
-      - run: .github/limit.sh cargo test --locked
+      - run: cargo test --locked
       # Release builds leave out the debug checks but keep the unlinked mark, which the tests read.
-      - run: cargo test --locked --release --no-run
-      - run: .github/limit.sh cargo test --locked --release
+      - run: cargo test --locked --release
       # The tests that need the flip type macro, which tailq cannot depend on and still ship its tests.
-      - run: cargo test --locked -p tailq-flip --no-run
-      - run: .github/limit.sh cargo test --locked -p tailq-flip
+      - run: cargo test --locked -p tailq-flip
       # Each benchmark once, in criterion's test mode, so that the benches keep building and running; optimised, as
       # they run for real, rather than with the debug checks, whose membership walk the random removals would repeat.
-      - run: cargo test --locked -p tailq-bench --benches --release --no-run
-      - run: .github/limit.sh cargo test --locked -p tailq-bench --benches --release
+      - run: cargo test --locked -p tailq-bench --benches --release
       # The crate as cargo publish uploads it, built on its own, so that a release cannot fail at the upload, and its
       # tests run from the package, which review 6 found could ship a test of a dependency it drops.
       - run: |
           cargo package --locked -p tailq
           crate=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "tailq") | .version')
-          cargo test --locked --manifest-path "target/package/tailq-$crate/Cargo.toml" --no-run
-          .github/limit.sh cargo test --locked --manifest-path "target/package/tailq-$crate/Cargo.toml"
+          cargo test --locked --manifest-path "target/package/tailq-$crate/Cargo.toml"
       # no_std: a bare-metal target has no std to link.
       - run: cargo build --locked --target x86_64-unknown-none
 
@@ -107,9 +103,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: nightly-2026-10-04
-      # The flip crate's doctests use tailq too, so both libraries are built first.
-      - run: cargo build --locked --lib -p tailq -p tailq-flip
-      - run: .github/limit.sh cargo test --locked --doc -p tailq -p tailq-flip
+      - run: cargo test --locked --doc -p tailq -p tailq-flip
 
   coverage:
     runs-on: ubuntu-latest
@@ -126,8 +120,7 @@ jobs:
       - run: |
           source <(cargo llvm-cov show-env --sh)
           cargo llvm-cov clean --workspace
-          cargo test --locked --no-run
-          .github/limit.sh cargo test --locked
+          cargo test --locked
           cargo llvm-cov report --json | python3 .github/coverage.py
 
   msrv:

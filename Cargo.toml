@@ -10,7 +10,7 @@ repository = "https://github.com/llp42/tailq"
 readme = "README.md"
 keywords = ["intrusive", "linked-list", "queue", "no-std", "tailq"]
 categories = ["data-structures", "no-std", "no-std::no-alloc", "embedded"]
-include = ["/src", "/tests", "/README.md", "/LICENSE"]
+include = ["/src", "/tests", "!/tests/limits.rs", "/README.md", "/LICENSE"]
 
 [workspace]
 # The benches live in their own crate, so that criterion is no dependency of this one: Miri on other targets then builds

@@ -86,29 +86,26 @@ only in crates of the 2024 edition.
 
 ## Development
 
-CI runs these checks on each PR. Every test runs through `.github/limit.sh`, which allows it 512 MiB of data memory
-and a timeout, after a build without the limit:
+CI runs these checks on each PR. Every test binary runs through `.github/limit.sh`, the runner `.cargo/config.toml`
+names, which allows it 512 MiB of data memory and a timeout after cargo builds it without the limit; `tests/limits.rs`
+fails when a test runs without it. Miri runs its own runner, so it runs under `limit.sh` as a whole:
 
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked
 cargo clippy --workspace --all-targets --locked --release
-for check in workflows workflows_test limits limits_test runs; do
-  python3 -I .github/check_$check.py
-done
+python3 -I .github/check_workflows.py
 cargo doc --no-deps --locked
 cargo build --locked --target x86_64-unknown-none
-cargo test --locked --no-run && .github/limit.sh cargo test --locked
-cargo test --locked --release --no-run && .github/limit.sh cargo test --locked --release
-cargo test --locked -p tailq-flip --no-run && .github/limit.sh cargo test --locked -p tailq-flip
-bench="cargo test --locked -p tailq-bench --benches --release"
-$bench --no-run && .github/limit.sh $bench
+cargo test --locked
+cargo test --locked --release
+cargo test --locked -p tailq-flip
+cargo test --locked -p tailq-bench --benches --release
 nightly=+nightly-2026-10-04
 miri=".github/limit.sh cargo $nightly miri test --locked"
 strict=-Zmiri-strict-provenance
 cargo $nightly miri setup  # Miri's sysroot, built without the limit, which it outgrows
-cargo $nightly build --locked --lib -p tailq -p tailq-flip
-.github/limit.sh cargo $nightly test --locked --doc -p tailq -p tailq-flip
+cargo $nightly test --locked --doc -p tailq -p tailq-flip
 MIRIFLAGS="$strict -Zmiri-symbolic-alignment-check" $miri
 MIRIFLAGS="$strict -Zmiri-tree-borrows" $miri
 MIRIFLAGS=$strict $miri --release

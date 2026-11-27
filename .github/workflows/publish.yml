@@ -38,8 +38,7 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
       # Here, with no publish credentials: the tests, and the crate as cargo publish uploads it, built on its own.
-      - run: cargo test --locked --no-run
-      - run: .github/limit.sh cargo test --locked
+      - run: cargo test --locked
       - run: cargo package --locked -p tailq
 
   publish:
