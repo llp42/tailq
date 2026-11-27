@@ -5,6 +5,11 @@
 //! under Miri to check that a node freed once it leaves is never touched
 //! again, and that the threads never race.
 
+#![expect(
+    clippy::tests_outside_test_module,
+    reason = "an integration test crate is itself the test module"
+)]
+
 use core::array;
 use core::mem::zeroed;
 use core::ptr::NonNull;

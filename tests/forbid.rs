@@ -7,6 +7,10 @@
 //! overrules an `allow`.  The expansion allows nothing now.
 
 #![forbid(dead_code, single_use_lifetimes, unsafe_code)]
+#![expect(
+    clippy::tests_outside_test_module,
+    reason = "an integration test crate is itself the test module"
+)]
 
 use tailq::{Link, TailQueue};
 

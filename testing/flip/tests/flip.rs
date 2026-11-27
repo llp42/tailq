@@ -9,6 +9,10 @@
 //! declares, wherever the odd answer falls.
 
 #![forbid(unsafe_code)]
+#![expect(
+    clippy::tests_outside_test_module,
+    reason = "an integration test crate is itself the test module"
+)]
 
 use core::mem::offset_of;
 use tailq::{Adapter, Link, TailQueue};

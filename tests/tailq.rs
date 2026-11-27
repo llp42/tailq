@@ -4,6 +4,11 @@
 //! Behaviour of the tail queue through its public API.  Run under Miri to
 //! check the pointer accesses as well as the results.
 
+#![expect(
+    clippy::tests_outside_test_module,
+    reason = "an integration test crate is itself the test module"
+)]
+
 use core::marker::PhantomData;
 use core::mem::{size_of, swap, take, zeroed};
 use core::ptr::NonNull;

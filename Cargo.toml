@@ -27,3 +27,16 @@ warnings = "deny"
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
+restriction = { level = "deny", priority = -1 }
+blanket_clippy_restriction_lints = "allow"  # the restriction group is denied on purpose; conflicting lints are allowed one by one
+implicit_return = "allow"  # conflicts with needless_return
+semicolon_inside_block = "allow"  # conflicts with semicolon_outside_block
+missing_trait_methods = "allow"  # traits provide default methods so implementations can omit them
+arbitrary_source_item_ordering = "allow"  # items follow their API relationships, not the alphabet
+question_mark_used = "allow"  # ? is the idiomatic early return
+pub_use = "allow"  # the crate root re-exports its public API
+single_call_fn = "allow"
+undocumented_unsafe_blocks = "allow"  # an unsafe fn's contract covers its blocks
+multiple_unsafe_ops_per_block = "allow"  # operations sharing one precondition share one block
+missing_docs_in_private_items = "allow"  # private items are documented only for what the code cannot say
+pub_with_shorthand = "allow"  # conflicts with pub_without_shorthand; use pub(crate)

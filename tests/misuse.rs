@@ -7,6 +7,10 @@
 //! still drop cleanly while the panic unwinds.
 
 #![cfg(debug_assertions)]
+#![expect(
+    clippy::tests_outside_test_module,
+    reason = "an integration test crate is itself the test module"
+)]
 
 use core::mem::ManuallyDrop;
 use core::panic::AssertUnwindSafe;

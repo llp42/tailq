@@ -6,6 +6,23 @@
 //! in the middle, cursor walks through the ghost, link marks and lengths.
 //! Under Miri the budget is small.
 
+#![expect(
+    clippy::tests_outside_test_module,
+    reason = "an integration test crate is itself the test module"
+)]
+#![expect(
+    clippy::missing_assert_message,
+    reason = "the checks live in helpers of the tests, and assert_eq prints \
+              the values that differ"
+)]
+#![expect(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    reason = "a model indexes itself and steps positions by one; going out \
+              of range or overflowing is a failure the test reports by \
+              panicking"
+)]
+
 extern crate alloc;
 
 use alloc::collections::VecDeque;
