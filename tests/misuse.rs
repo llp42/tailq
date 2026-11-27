@@ -510,3 +510,106 @@ fn a_first_node_overwritten_by_another_is_not_popped() {
     }
     assert!(queue.pop_front_ptr().is_none(), "unreachable");
 }
+
+/// Review 4: a push at the back checks the last node before it writes its
+/// link, as linking after it through a cursor does.
+#[test]
+#[should_panic(
+    expected = "tail queue: the previous link does not point at this one"
+)]
+fn no_node_is_pushed_after_an_overwritten_last_node() {
+    let nodes = Nodes::new(5);
+    let (mut queue, _other) = overwritten_last(&nodes);
+    // SAFETY: the spare is live and on no queue.
+    unsafe { queue.push_back_ptr(nodes.at(4)) };
+}
+
+/// Review 4: an append checks the last node of this queue before it
+/// writes its link.
+#[test]
+#[should_panic(
+    expected = "tail queue: the previous link does not point at this one"
+)]
+fn no_queue_is_appended_after_an_overwritten_last_node() {
+    let nodes = Nodes::new(5);
+    let (mut queue, _other) = overwritten_last(&nodes);
+    let mut third = Queue::new();
+    // SAFETY: the spare is live and on no queue.
+    unsafe { third.push_back_ptr(nodes.at(4)) };
+    queue.append(&mut third);
+}
+
+/// Two queues of two, the first node of `queue` overwritten by the first
+/// of `other`, so that its `next` names a node whose `prev` is not it; the
+/// fifth node is a spare on no queue.  `queue` is never dropped: its walk
+/// would enter `other` through the copy.
+fn overwritten_first(nodes: &Nodes) -> (ManuallyDrop<Queue>, Queue) {
+    let mut queue = ManuallyDrop::new(Queue::new());
+    let mut other = Queue::new();
+    // SAFETY: the nodes are live and outlive both queues, and each is on
+    // no queue when pushed; the copy is the misuse.
+    unsafe {
+        queue.push_back_ptr(nodes.at(0));
+        queue.push_back_ptr(nodes.at(1));
+        other.push_back_ptr(nodes.at(2));
+        other.push_back_ptr(nodes.at(3));
+        ptr::copy_nonoverlapping(nodes.at(2).as_ptr(), nodes.at(0).as_ptr(), 1);
+    }
+    (queue, other)
+}
+
+/// Review 4: a push at the front checks the first node before it writes
+/// its link.
+#[test]
+#[should_panic(expected = "tail queue: the next link does not point back")]
+fn no_node_is_pushed_before_an_overwritten_first_node() {
+    let nodes = Nodes::new(5);
+    let (mut queue, _other) = overwritten_first(&nodes);
+    // SAFETY: the spare is live and on no queue.
+    unsafe { queue.push_front_ptr(nodes.at(4)) };
+}
+
+/// Review 4: an append checks the first node of the queue it takes before
+/// it writes its link.
+#[test]
+#[should_panic(expected = "tail queue: the next link does not point back")]
+fn no_queue_is_appended_with_an_overwritten_first_node() {
+    let nodes = Nodes::new(5);
+    let (mut donor, _other) = overwritten_first(&nodes);
+    let mut queue = Queue::new();
+    queue.append(&mut donor);
+}
+
+// Review 4, mutation testing: each test below fails for a mutant of a debug
+// check that no other test noticed.  Append to tests/misuse.rs.
+
+/// Mutant C01: a stale head that pops a node which already left is caught
+/// before the check reads the leaving link's poisoned forward word.
+#[test]
+#[should_panic(expected = "tail queue: the link is on no queue")]
+fn a_stale_head_does_not_pop_a_node_that_already_left() {
+    let nodes = Nodes::new(2);
+    let (mut queue, mut stale) = stale_copy(&nodes);
+    assert!(queue.pop_front_ptr().is_some(), "two nodes");
+    assert!(stale.pop_front_ptr().is_none(), "unreachable");
+}
+
+/// Mutant C03, and 0fd7ca5's claim: a link on no queue that the membership
+/// walk meets on its way, here the first node's, zeroed in place, is caught
+/// too, rather than read as linked through `unwrap_unchecked`.
+#[test]
+#[should_panic(expected = "tail queue: the link is on no queue")]
+fn a_link_on_no_queue_met_mid_walk_is_caught() {
+    let nodes = Nodes::new(3);
+    let mut queue = Queue::new();
+    // SAFETY: the nodes are live and outlive the queue, and each is on no
+    // queue when pushed.  Zeroing the first node's link in place, as a
+    // memset of the node would, is the misuse.
+    unsafe {
+        for i in 0..3 {
+            queue.push_back_ptr(nodes.at(i));
+        }
+        ptr::write(&raw mut (*nodes.at(0).as_ptr()).link, Link::new());
+        queue.remove_ptr(nodes.at(1));
+    }
+}

@@ -473,3 +473,53 @@
 //! let mut queue = TailQueue::<NodeLink>::new();
 //! queue.pop_front_ptr();
 //! ```
+//!
+//! A method of the caller's cannot stand in for the slot's pointer, which a
+//! method call would reach first: on nightly, a const trait method could
+//! return a pointer to another type, and the checks would look at that
+//! type while the offset measured the node.
+//!
+//! ```compile_fail,E0308
+//! #![feature(const_trait_impl)]
+//! use core::mem::MaybeUninit;
+//! use tailq::Link;
+//! #[repr(C)]
+//! struct Fake { link: Link }
+//! #[repr(C)]
+//! struct Node { link: &'static u64, rest: Option<&'static u64> }
+//! const trait Hijack { fn as_mut_ptr(self) -> *mut Fake; }
+//! const impl Hijack for MaybeUninit<Node> {
+//!     fn as_mut_ptr(self) -> *mut Fake { core::ptr::dangling_mut() }
+//! }
+//! tailq::adapter!(NodeLink = Node { link });
+//! ```
+//!
+//! nor make the payload rule, called directly, measure a payload in
+//! another type than the adapter's node:
+//!
+//! ```compile_fail,E0308
+//! #![feature(const_trait_impl)]
+//! use core::mem::MaybeUninit;
+//! use tailq::Link;
+//! #[repr(C)]
+//! struct Node { big: [u8; 8], link: Link }
+//! #[repr(C)]
+//! struct Fake { pad: [u8; 4096], big: [u8; 8] }
+//! const trait Hijack { fn as_mut_ptr(self) -> *mut Node; }
+//! const impl Hijack for MaybeUninit<Fake> {
+//!     fn as_mut_ptr(self) -> *mut Node { core::ptr::dangling_mut() }
+//! }
+//! tailq::adapter!(NodeLink = Node { link });
+//! tailq::__adapter!(@payload NodeLink [] [] [] Fake, [big: [u8; 8]]);
+//! ```
+//!
+//! Review 4, mutant T01: a packed node fails even with its link first, at
+//! offset 0, where only the node's own alignment shows that the link is
+//! unaligned, as it is in every node of an array but the first:
+//!
+//! ```compile_fail,E0080
+//! use tailq::Link;
+//! #[repr(C, packed)]
+//! struct Node { link: Link, tag: u8 }
+//! tailq::adapter!(NodeLink = Node { link });
+//! ```

@@ -446,23 +446,29 @@ fn a_walk_by_pointer_may_remove_what_it_hands_out() {
     }
 }
 
-/// The same review found that a walk whose other end left the queue meanwhile
-/// stepped past the queue's new end, into `unwrap_unchecked` on `None`: it
-/// ends there now, from either end, through `next` and through `fold`.
+/// The same review found that a walk whose other end left the queue
+/// meanwhile stepped past the queue's new end, into `unwrap_unchecked` on
+/// `None`.  The fourth review narrowed the walk contract, so this change is
+/// now outside it; still, the walk ends at a missing link rather than step
+/// past it, from either end, through `next` and through `fold`, whenever
+/// it has not read the node that left yet.
 #[test]
 fn a_walk_by_pointer_ends_when_its_other_end_leaves() {
     let ways: [u8; 4] = [0, 1, 2, 3];
     for way in ways {
         let mut nodes = nodes::<4>();
-        let (first, last) =
-            (NonNull::from(&nodes[0]), NonNull::from(&nodes[3]));
+        let base = nodes.as_mut_ptr();
         let mut head = Queue::new();
         let mut seen = Vec::new();
         // SAFETY: the nodes outlive the queue and are on no queue; the walk
         // removes the node at its other end, which it then never reaches,
         // and no reference to the queue is alive meanwhile.
         unsafe {
-            let queue = by_pointer::<4>(&mut head, nodes.as_mut_ptr());
+            let (first, last) = (
+                NonNull::new_unchecked(base),
+                NonNull::new_unchecked(base.add(3)),
+            );
+            let queue = by_pointer::<4>(&mut head, base);
             let other = if way.is_multiple_of(2) { last } else { first };
             let mut visit = |node: NonNull<Node>| {
                 if seen.is_empty() {
@@ -726,4 +732,213 @@ fn a_forgotten_head_leaves_its_nodes_marked() {
         assert_eq!(queue.iter().count(), 2);
     }
     assert!(nodes.iter().all(|node| node.link.is_linked()));
+}
+
+/// The fourth review found that a lifetime parameter named `'node` met the
+/// macro's own binder of that name, and that a type named `Headers` in the
+/// bounds met the macro's check item: both are named so that no caller's
+/// name meets them now.
+#[test]
+fn adapters_take_any_names() {
+    trait Marked<Mark> {}
+    struct Headers;
+    impl Marked<Headers> for u8 {}
+
+    struct Named<'node, T> {
+        link: Link,
+        name: &'node str,
+        extra: T,
+    }
+
+    tailq::adapter!(
+        NamedLink<'node, T> = Named<'node, T> { link, mut name: &'node str }
+            where T: Marked<Headers>
+    );
+
+    let text = String::from("old");
+    let mut node = Named {
+        link: Link::new(),
+        name: text.as_str(),
+        extra: 7,
+    };
+    let mut queue = TailQueue::<'_, NamedLink<'_, u8>>::new();
+    queue.push_back(&mut node);
+    if let Some(name) = queue.front_mut() {
+        *name = "new";
+    }
+    assert_eq!(
+        queue.front().map(|named| (named.name, named.extra)),
+        Some(("new", 7))
+    );
+}
+
+/// The fourth review found that the third round's promise, that a walk
+/// ends early when a node at its other end leaves, did not hold, and the
+/// walk contract is now what holds: removing the node a walk has just
+/// handed out, from either end.  Here a counted walk alternates ends,
+/// removes each node it hands out, and still knows how many it has left.
+#[test]
+fn a_walk_by_pointer_may_mix_ends_while_removing_what_it_hands_out() {
+    let mut nodes = nodes::<5>();
+    let base = nodes.as_mut_ptr();
+    let mut head = CountedQueue::new();
+    let queue = ptr::from_mut(&mut head);
+    let mut seen = Vec::new();
+    // SAFETY: the nodes outlive the queue and are on no queue; each is
+    // removed right after the walk hands it out, and no reference to the
+    // queue is alive meanwhile.
+    unsafe {
+        for i in 0..5 {
+            (*queue).push_back_ptr(NonNull::new_unchecked(base.add(i)));
+        }
+        let mut walk = (*queue).iter_ptr();
+        let mut from_back = false;
+        while let Some(node) = if from_back {
+            walk.next_back()
+        } else {
+            walk.next()
+        } {
+            seen.push(((*node.as_ptr()).key, walk.len()));
+            (*queue).remove_ptr(node);
+            from_back = !from_back;
+        }
+        assert!((*queue).is_empty() && walk.next().is_none());
+    }
+    assert_eq!(seen, [(1, 4), (5, 3), (2, 2), (4, 1), (3, 0)]);
+}
+
+/// The same review found that a backward walk whose next node had left
+/// the queue, still live, ran into `unwrap_unchecked` on its `prev`.  That
+/// change is outside the walk contract, but the walk now reads `prev` with
+/// a check, and ends there rather than run into undefined behaviour in the
+/// crate.
+#[test]
+fn a_backward_walk_ends_at_a_node_that_left() {
+    let ways: [bool; 2] = [false, true];
+    for by_fold in ways {
+        let mut nodes = nodes::<2>();
+        let base = nodes.as_mut_ptr();
+        let mut head = Queue::new();
+        let mut seen = Vec::new();
+        // SAFETY: the nodes outlive the queue and are on no queue; the
+        // first node leaves while the walk holds it, and stays live.
+        unsafe {
+            let first = NonNull::new_unchecked(base);
+            let queue = by_pointer::<2>(&mut head, base);
+            let mut visit = |node: NonNull<Node>| {
+                if seen.is_empty() {
+                    (*queue).remove_ptr(first);
+                }
+                seen.push((*node.as_ptr()).key);
+            };
+            if by_fold {
+                (*queue).iter_ptr().rev().for_each(&mut visit);
+            } else {
+                for node in (*queue).iter_ptr().rev() {
+                    visit(node);
+                }
+            }
+            (*queue).clear();
+        }
+        assert_eq!(seen, [2, 1]);
+    }
+}
+
+// Review 4, mutation testing and requirement audit: each test below fails
+// for a mutant no other test noticed.  Append to tests/regressions.rs.
+
+/// Steps a walk from its back, or from its front.
+fn step(
+    walk: &mut tailq::IterPtr<'_, NodeLink>,
+    backward: bool,
+) -> Option<NonNull<Node>> {
+    if backward {
+        walk.next_back()
+    } else {
+        walk.next()
+    }
+}
+
+/// Mutants N01 and N02: a walk that ended early, because the node at its
+/// other end left, has ended at both ends, so the end that held the node
+/// that left hands out nothing more.
+#[test]
+fn a_walk_by_pointer_that_ended_early_has_ended() {
+    for backward in [false, true] {
+        let mut nodes = nodes::<4>();
+        let mut head = Queue::new();
+        let mut seen = Vec::new();
+        // SAFETY: the nodes outlive the queue and are on no queue; the walk
+        // removes the node at its other end once it has handed out one,
+        // and no reference to the queue is alive meanwhile.
+        unsafe {
+            let queue = by_pointer::<4>(&mut head, nodes.as_mut_ptr());
+            // The pointer the node at the other end was pushed with.
+            let other = if backward {
+                (*queue).front_ptr()
+            } else {
+                (*queue).back_ptr()
+            };
+            let mut walk = (*queue).iter_ptr();
+            while let Some(node) = step(&mut walk, backward) {
+                if seen.is_empty()
+                    && let Some(gone) = other
+                {
+                    (*queue).remove_ptr(gone);
+                }
+                seen.push((*node.as_ptr()).key);
+            }
+            let after = step(&mut walk, !backward);
+            assert_eq!((after, walk.size_hint()), (None, (0, Some(0))));
+            (*queue).clear();
+        }
+        let expected: [u32; 3] = if backward { [4, 3, 2] } else { [1, 2, 3] };
+        assert_eq!(seen, expected);
+    }
+}
+
+/// A node whose payload lies four bytes past a multiple of the link's
+/// alignment.
+#[repr(C)]
+struct Tagged {
+    link: Link,
+    tag: u32,
+    key: u32,
+}
+
+tailq::adapter!(TaggedLink = Tagged { link, mut key: u32 });
+
+/// Mutant L02: a payload needs its own alignment, not the link's.
+#[test]
+fn a_payload_needs_only_its_own_alignment() {
+    assert_eq!(payload_offset::<Tagged, u32>(20), 20);
+    let mut node = Tagged {
+        link: Link::new(),
+        tag: 1,
+        key: 2,
+    };
+    let mut queue = TailQueue::<'_, TaggedLink>::new();
+    queue.push_back(&mut node);
+    if let Some(key) = queue.front_mut() {
+        *key = key.wrapping_add(10);
+    }
+    assert_eq!(
+        queue.front().map(|front| (front.tag, front.key)),
+        Some((1, 12))
+    );
+}
+
+/// Mutants R01 and X01, and round 3's M35, which only a reordered layout
+/// showed: the head is `repr(C)`, `Counted` `repr(transparent)` and a link
+/// `repr(C)`, as the docs promise.  Only then may an `extern "C"` function
+/// take them by value: otherwise `improper_ctypes_definitions` fails this
+/// file.
+#[deny(improper_ctypes_definitions)]
+extern "C" fn by_value(queue: CountedQueue<'static>, link: Link) -> usize {
+    queue.len().wrapping_add(usize::from(link.is_linked()))
+}
+
+#[test]
+fn heads_counts_and_links_have_c_layouts() {
+    assert_eq!(by_value(CountedQueue::new(), Link::new()), 0);
 }

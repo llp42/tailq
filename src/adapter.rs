@@ -399,7 +399,10 @@ macro_rules! __adapter {
 
             const OFFSET: usize = {
                 let mut slot = $crate::__private::MaybeUninit::<$node>::uninit();
-                let node = slot.as_mut_ptr();
+                // By path and of a stated type: a method call could reach a
+                // trait method of the caller's instead.
+                let node: *mut $node =
+                    $crate::__private::MaybeUninit::<$node>::as_mut_ptr(&mut slot);
                 // A raw place, which is never deref-coerced: rejects a
                 // field that only derefs to a link.
                 // SAFETY: the place is a field of the slot, and nothing
@@ -425,7 +428,7 @@ macro_rules! __adapter {
     ) => {
         const _: () = {
             #[allow(dead_code)]
-            struct Headers<$($decl)*>(
+            struct __TailqHeaders<$($decl)*>(
                 $crate::__private::PhantomData<fn() -> $name<$($arg)*>>,
             )
             where
@@ -465,7 +468,10 @@ macro_rules! __adapter {
 
             const PAYLOAD_OFFSET: usize = {
                 let mut slot = $crate::__private::MaybeUninit::<$node>::uninit();
-                let node = slot.as_mut_ptr();
+                // By path and of a stated type: a method call could reach a
+                // trait method of the caller's instead.
+                let node: *mut $node =
+                    $crate::__private::MaybeUninit::<$node>::as_mut_ptr(&mut slot);
                 // The adapter's own node.
                 let _: *mut <Self as $crate::Adapter>::Node = node;
                 // A raw place, which is never deref-coerced: proves the
@@ -476,7 +482,7 @@ macro_rules! __adapter {
                     unsafe { &raw mut (*node).$($payload).+ };
                 // A reference to the field: rejects a path through a union,
                 // whose other fields could leave the payload invalid.
-                let _: for<'node> fn(&'node $node) -> &'node $payload_ty =
+                let _: for<'__tailq_node> fn(&'__tailq_node $node) -> &'__tailq_node $payload_ty =
                     |node| &node.$($payload).+;
                 // Aligned in every node: rejects a packed field that could
                 // leave the payload unaligned.

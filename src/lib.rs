@@ -480,6 +480,10 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
             !new.is_linked(),
             "tail queue: the link is already on a queue",
         );
+        if let Some(first) = self.first {
+            // SAFETY: the first node is live and on this queue.
+            unsafe { self.check(first) };
+        }
         let next = self.first;
         self.first = Some(link);
         new.next.set(next);
@@ -512,6 +516,10 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
             !new.is_linked(),
             "tail queue: the link is already on a queue",
         );
+        if let Some(last) = self.last {
+            // SAFETY: the last node is live and on this queue.
+            unsafe { self.check(last) };
+        }
         let before = self.last;
         self.last = Some(link);
         new.next.set(None);
@@ -700,10 +708,19 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// leaving `other` empty.
     #[inline]
     pub fn append(&mut self, other: &mut Self) {
-        let Some(first) = other.first.take() else {
+        let Some(first) = other.first else {
             return;
         };
-        // SAFETY: `first` is the link of a live node on `other`.
+        // SAFETY: `first` is the link of a live node on `other`, and the
+        // last of this queue that of a live node on this one.
+        unsafe {
+            other.check(first);
+            if let Some(last) = self.last {
+                self.check(last);
+            }
+        }
+        other.first = None;
+        // SAFETY: as above.
         let head = unsafe { first.as_ref() };
         match self.last {
             Some(last) => {
