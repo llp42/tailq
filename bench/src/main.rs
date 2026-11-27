@@ -22,6 +22,15 @@
 //!   outgrows the cache.
 //! - `concat`: deal the nodes round-robin over 16 queues, then append
 //!   them all onto the first.
+//!
+//! `cargo run --release -p tailq-bench -- --bench` times them; without
+//! `--bench`, criterion runs each workload once, in its test mode.  The
+//! crate is its own so that criterion is no dependency of `tailq`.
+
+#![expect(
+    clippy::multiple_crate_versions,
+    reason = "criterion's dependencies take two versions of syn: zerocopy-derive 2 and serde_derive 3"
+)]
 
 use core::hint::black_box;
 use core::ptr::NonNull;

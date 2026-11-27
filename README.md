@@ -102,7 +102,7 @@ cargo build --locked --target x86_64-unknown-none
 cargo test --locked
 cargo test --locked --release
 cargo test --locked -p tailq-flip
-cargo test --locked -p tailq-bench --benches --release
+cargo run --locked --release -p tailq-bench
 nightly=+nightly-2026-10-04
 miri=".github/limit.sh cargo $nightly miri test --locked"
 strict=-Zmiri-strict-provenance
@@ -126,12 +126,12 @@ Coverage must be complete: every code region of `src/` runs in the tests, in som
 `cargo llvm-cov show-env`.
 
 `tests/regressions.rs` holds one test per guarantee, each named after what it pins, `tests/misuse.rs` holds the misuse
-that debug builds catch, and `src/compile_fail.rs` what must not compile. The tests that need `testing/flip/`, a type
+that debug builds catch, and `src/compile_fail.rs` what must not compile. The tests that need `flip/`, a type
 macro whose answer changes from one expansion to the next, live in that crate, so that `tailq` does not depend on it:
 they check that `adapter!` names each type once.
 
-The benches are in their own crate, `bench/`, so that criterion is no dependency of `tailq`: `cargo bench -p
-tailq-bench`.
+The benches are a program of their own, `bench/`, so that criterion is no dependency of `tailq`: `cargo run
+--release -p tailq-bench -- --bench` times them, and without `--bench` runs each one once.
 
 CI also packages the crate, builds the library on Rust 1.99.0, the minimum, and lints the Markdown with
 markdownlint-cli2.

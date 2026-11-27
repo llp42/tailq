@@ -15,7 +15,7 @@ include = ["/src", "/tests", "!/tests/limits.rs", "/README.md", "/LICENSE"]
 [workspace]
 # The benches live in their own crate, so that criterion is no dependency of this one: Miri on other targets then builds
 # nothing but the crate and its tests.
-members = ["bench", "testing/flip"]
+members = ["bench", "flip"]
 
 [lints]
 workspace = true

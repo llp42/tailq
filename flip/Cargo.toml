@@ -7,7 +7,7 @@ authors = ["Leonardo Lopes Pereira <leonardolopespereira@outlook.com>"]
 license = "MIT"
 description = "A type macro whose answer changes from one expansion to the next, for tailq's tests"
 repository = "https://github.com/llp42/tailq"
-readme = "../../README.md"
+readme = "../README.md"
 keywords = ["test"]
 categories = ["development-tools::testing"]
 publish = false
@@ -16,7 +16,7 @@ publish = false
 proc-macro = true
 
 [dev-dependencies]
-tailq = { path = "../.." }
+tailq = { path = ".." }
 
 [lints]
 workspace = true

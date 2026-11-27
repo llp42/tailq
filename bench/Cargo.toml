@@ -12,13 +12,9 @@ keywords = ["intrusive", "linked-list", "queue", "benchmark"]
 categories = ["data-structures"]
 publish = false
 
-[dev-dependencies]
+[dependencies]
 tailq = { path = ".." }
 criterion = { version = "=0.8.2", default-features = false, features = ["cargo_bench_support"] }
-
-[[bench]]
-name = "tailq"
-harness = false
 
 [lints]
 workspace = true
