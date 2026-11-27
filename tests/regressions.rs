@@ -1122,6 +1122,48 @@ fn adapters_meet_no_constant_or_unit_struct_of_the_callers() {
     assert_eq!(queue.front().map(|front| front.key), Some(8));
 }
 
+/// `adapter!` compiles beside a type of the caller's named `usize`, as it
+/// does beside a constant named `node` or a unit struct named `slot`: an
+/// adapter's offsets are the primitive `usize`, which the expansion names
+/// so that no item of the caller's meets it, and they equal the offsets of
+/// the link and the payload.
+#[test]
+#[expect(
+    non_camel_case_types,
+    reason = "the name of the type the adapter's offsets have"
+)]
+fn adapters_meet_no_type_named_usize() {
+    type usize = u32;
+
+    struct Keyed {
+        link: Link,
+        key: usize,
+    }
+
+    tailq::adapter!(KeyedLink = Keyed { link, mut key: usize });
+
+    assert_eq!(
+        (
+            <KeyedLink as tailq::Adapter>::OFFSET,
+            <KeyedLink as tailq::Payload>::PAYLOAD_OFFSET
+        ),
+        (
+            core::mem::offset_of!(Keyed, link),
+            core::mem::offset_of!(Keyed, key)
+        )
+    );
+    let mut one = Keyed {
+        link: Link::new(),
+        key: 7,
+    };
+    let mut queue = TailQueue::<'_, KeyedLink>::new();
+    queue.push_back(&mut one);
+    if let Some(key) = queue.front_mut() {
+        *key = key.wrapping_add(1);
+    }
+    assert_eq!(queue.front().map(|front| front.key), Some(8));
+}
+
 /// The same for a const parameter named `slot`.
 #[test]
 #[expect(

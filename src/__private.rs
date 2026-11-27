@@ -11,6 +11,7 @@ pub use crate::adapter::check_payload;
 pub use core::convert::Infallible;
 pub use core::marker::{PhantomData, Sized};
 pub use core::mem::{MaybeUninit, offset_of};
+pub use core::primitive::usize;
 
 use crate::Link;
 

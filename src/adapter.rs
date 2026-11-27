@@ -212,9 +212,9 @@ where
 /// The macro is tested only in crates of the 2024 edition, the one
 /// `tailq` itself is written in.
 ///
-/// Doc comments and `#[doc]` attributes are the only attributes the
-/// adapter takes, since the items the macro declares beside it name it
-/// too.  A `#[cfg]` goes on the call, and leaves out all of them:
+/// Doc comments, `#[doc = ...]` and `#[doc(...)]`, with `doc` spelled
+/// plain, are the only attributes the adapter takes, since the items the
+/// macro declares beside it name it too.  A `#[cfg]` goes on the call, and leaves out all of them:
 ///
 /// ```
 /// use tailq::Link;
@@ -472,7 +472,7 @@ macro_rules! __adapter {
             // `$node` is pasted once, above: a type that is a macro call
             // expands again at each paste, maybe to another type, so the
             // checks name the node as `Self::Node`.
-            const OFFSET: usize = {
+            const OFFSET: $crate::__private::usize = {
                 // A reference to the field, outside any `unsafe` block:
                 // rejects a path through a union, whose other fields could
                 // leave no link at the offset.  The raw places below sit in
@@ -543,7 +543,7 @@ macro_rules! __adapter {
     // An adapter with no parameters is checked where it is declared; a
     // generic one where it is first used.
     (@check [] $name:ident) => {
-        const _: usize = <$name as $crate::Adapter>::OFFSET;
+        const _: $crate::__private::usize = <$name as $crate::Adapter>::OFFSET;
     };
     (@check [$($decl:tt)+] $name:ident) => {};
     (@check_payload [] $name:ident) => {
@@ -573,7 +573,7 @@ macro_rules! __adapter {
 
             // As for the link, `$payload_ty` is pasted once, above, and
             // `$node` only here, to check that it is the adapter's node.
-            const PAYLOAD_OFFSET: usize = {
+            const PAYLOAD_OFFSET: $crate::__private::usize = {
                 // Not a coercion site, which would let `*mut Node` unsize
                 // to `*mut dyn Trait`: the two types must be equal.
                 let _: $crate::__private::PhantomData<*mut $node> =
