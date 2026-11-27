@@ -640,6 +640,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         // SAFETY: as above.
         let link = unsafe { first.as_ref() };
         let next = link.next.get();
+        self.check_count(next.is_none());
         self.first = next;
         match next {
             // SAFETY: the next node is live.
@@ -669,6 +670,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         let link = unsafe { last.as_ref() };
         // SAFETY: the link is on this queue.
         let before = unsafe { link.prev_link() };
+        self.check_count(before.is_none());
         match before {
             // SAFETY: the previous node is live.
             Some(prev) => unsafe { prev.as_ref() }.next.set(None),
@@ -857,6 +859,22 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         own.unwrap_or(at)
     }
 
+    /// Checks, in debug builds, that a counted queue whose last node is
+    /// leaving counts that one node, as a stale copy of its head that took
+    /// a node off would leave it counting more.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when `empties` and the queue counts other than one
+    /// node.
+    #[inline]
+    fn check_count(&self, empties: bool) {
+        debug_assert!(
+            !empties || self.count.exact().is_none_or(|left| left == 1),
+            "tail queue: the queue is corrupt",
+        );
+    }
+
     /// Checks, in debug builds, that the link `at` is on this queue: walks
     /// this queue from both ends at once until it meets `at`.  It costs
     /// O(min(i, n - i)) for the `i`th of `n` nodes, and nothing in release
@@ -1020,8 +1038,16 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         &self,
         current: Option<NonNull<Link>>,
     ) -> Option<NonNull<Link>> {
-        // SAFETY: the node is live and on this queue.
-        current.map_or(self.last, |link| unsafe { link.as_ref().prev_link() })
+        current.map_or(self.last, |at| {
+            // SAFETY: the node is live.
+            let link = unsafe { at.as_ref() };
+            debug_assert!(
+                link.prev.get().is_some(),
+                "tail queue: the node at the cursor has left the queue",
+            );
+            // SAFETY: the node is on this queue.
+            unsafe { link.prev_link() }
+        })
     }
 
     /// Returns the link after `current`: the first at the ghost, and
@@ -1031,15 +1057,19 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// `current` must be `None` or the link of a live node on this queue.
     #[inline]
-    const unsafe fn next_after(
+    unsafe fn next_after(
         &self,
         current: Option<NonNull<Link>>,
     ) -> Option<NonNull<Link>> {
-        match current {
-            None => self.first,
-            // SAFETY: the node is live.
-            Some(link) => unsafe { link.as_ref() }.next.get(),
-        }
+        // SAFETY: the node is live.
+        let next = current
+            .map_or(self.first, |link| unsafe { link.as_ref() }.next.get());
+        // The forward word debug builds fill a leaving link's with.
+        debug_assert!(
+            !is(next, NOWHERE),
+            "tail queue: the node at the cursor has left the queue",
+        );
+        next
     }
 
     /// Links `link` after the link `at`.
@@ -1133,6 +1163,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         let back = link.prev.get();
         // SAFETY: the link is on this queue.
         let before = unsafe { link.prev_link() };
+        self.check_count(before.is_none() && next.is_none());
         match before {
             // SAFETY: the previous node is live.
             Some(prev) => unsafe { prev.as_ref() }.next.set(next),

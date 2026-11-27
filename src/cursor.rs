@@ -69,16 +69,15 @@ impl<'head, 'nodes, A: Adapter, C: Count> Cursor<'head, 'nodes, A, C> {
     pub fn move_next(&mut self) {
         // SAFETY: the cursor rests on the queue's ghost or on one of its
         // nodes.
-        let next = unsafe { self.queue.next_after(self.current) };
-        debug_assert!(
-            !is(next, NOWHERE),
-            "tail queue: the node at the cursor has left the queue",
-        );
-        self.current = next;
+        self.current = unsafe { self.queue.next_after(self.current) };
     }
 
     /// Moves to the previous node: from the first node to the ghost, and
     /// from the ghost to the back.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when the node at the cursor has left the queue.
     #[inline]
     pub fn move_prev(&mut self) {
         // SAFETY: the cursor rests on the queue's ghost or on one of its
@@ -88,6 +87,10 @@ impl<'head, 'nodes, A: Adapter, C: Count> Cursor<'head, 'nodes, A, C> {
 
     /// Returns the node after the cursor without moving, or `None` past
     /// the last node; from the ghost, the front.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when the node at the cursor has left the queue.
     #[must_use]
     #[inline]
     pub fn peek_next(&self) -> Option<&'head A::Node> {
@@ -97,6 +100,10 @@ impl<'head, 'nodes, A: Adapter, C: Count> Cursor<'head, 'nodes, A, C> {
 
     /// Returns the node before the cursor without moving, or `None`
     /// before the first node; from the ghost, the back.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when the node at the cursor has left the queue.
     #[must_use]
     #[inline]
     pub fn peek_prev(&self) -> Option<&'head A::Node> {
@@ -107,6 +114,10 @@ impl<'head, 'nodes, A: Adapter, C: Count> Cursor<'head, 'nodes, A, C> {
     /// Returns a pointer to the node after the cursor, as
     /// [`peek_next`](Self::peek_next) and [`current_ptr`](Self::current_ptr)
     /// do.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when the node at the cursor has left the queue.
     #[must_use]
     #[inline]
     pub fn peek_next_ptr(&self) -> Option<NonNull<A::Node>> {
@@ -119,6 +130,10 @@ impl<'head, 'nodes, A: Adapter, C: Count> Cursor<'head, 'nodes, A, C> {
     /// Returns a pointer to the node before the cursor, as
     /// [`peek_prev`](Self::peek_prev) and [`current_ptr`](Self::current_ptr)
     /// do.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when the node at the cursor has left the queue.
     #[must_use]
     #[inline]
     pub fn peek_prev_ptr(&self) -> Option<NonNull<A::Node>> {
@@ -196,6 +211,10 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
 
     /// Moves to the previous node: from the first node to the ghost, and
     /// from the ghost to the back.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when the node at the cursor has left the queue.
     #[inline]
     pub fn move_prev(&mut self) {
         let mut cursor = self.as_cursor();
@@ -205,6 +224,10 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
 
     /// Returns the node after the cursor without moving, or `None` past
     /// the last node; from the ghost, the front.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when the node at the cursor has left the queue.
     #[must_use]
     #[inline]
     pub fn peek_next(&self) -> Option<&A::Node> {
@@ -213,6 +236,10 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
 
     /// Returns the node before the cursor without moving, or `None`
     /// before the first node; from the ghost, the back.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when the node at the cursor has left the queue.
     #[must_use]
     #[inline]
     pub fn peek_prev(&self) -> Option<&A::Node> {
@@ -222,6 +249,10 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     /// Returns a pointer to the node after the cursor, as
     /// [`peek_next`](Self::peek_next) and [`current_ptr`](Self::current_ptr)
     /// do.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when the node at the cursor has left the queue.
     #[must_use]
     #[inline]
     pub fn peek_next_ptr(&self) -> Option<NonNull<A::Node>> {
@@ -231,6 +262,10 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     /// Returns a pointer to the node before the cursor, as
     /// [`peek_prev`](Self::peek_prev) and [`current_ptr`](Self::current_ptr)
     /// do.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when the node at the cursor has left the queue.
     #[must_use]
     #[inline]
     pub fn peek_prev_ptr(&self) -> Option<NonNull<A::Node>> {

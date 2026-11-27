@@ -605,30 +605,125 @@ fn a_stale_head_whose_first_left_removes_nothing() {
     unsafe { stale.remove_ptr(nodes.at(3)) };
 }
 
-/// A cursor does not step off a node that left while the cursor was in
-/// use: the forward word it reads is the one debug builds fill a leaving
-/// link's with.  Here code that reaches a head by pointer removes the
-/// middle of three nodes under a cursor resting on it.  Under Miri,
-/// Stacked Borrows refuses the cursor's borrow of the head first.
-#[test]
-#[cfg_attr(miri, ignore = "Stacked Borrows refuses the cursor's borrow first")]
-#[should_panic(
-    expected = "tail queue: the node at the cursor has left the queue"
-)]
-fn a_cursor_does_not_step_off_a_node_that_left() {
+/// What a cursor does once its node has left.
+#[derive(Clone, Copy)]
+enum Step {
+    Next,
+    Prev,
+    PeekNext,
+}
+
+/// Builds a cursor on the middle of three nodes of a head reached by
+/// pointer, removes that node while the cursor is in use, which is the
+/// misuse, and then takes `step` with the cursor.
+fn step_off_a_node_that_left(step: Step) {
     let nodes = Nodes::new(3);
     let mut head = Queue::new();
     let queue = ptr::from_mut(&mut head);
     // SAFETY: the nodes are live and outlive the queue, and each is on no
-    // queue when pushed; removing the middle one while the cursor is in
-    // use is the misuse.
+    // queue when pushed; the middle one is on the queue when the cursor is
+    // built and removed.
     unsafe {
         for i in 0..3 {
             (*queue).push_back_ptr(nodes.at(i));
         }
         let mut cursor = (*queue).cursor_from_ptr(nodes.at(1));
         (*queue).remove_ptr(nodes.at(1));
-        cursor.move_next();
+        match step {
+            Step::Next => cursor.move_next(),
+            Step::Prev => cursor.move_prev(),
+            Step::PeekNext => {
+                let _: Option<NonNull<Node>> = cursor.peek_next_ptr();
+            }
+        }
+    }
+}
+
+/// A cursor does not step off a node that left while the cursor was in
+/// use: the forward word it reads is the one debug builds fill a leaving
+/// link's with.  Under Miri, Stacked Borrows refuses the cursor's borrow of
+/// the head first, here and in the tests below.
+#[test]
+#[cfg_attr(miri, ignore = "Stacked Borrows refuses the cursor's borrow first")]
+#[should_panic(
+    expected = "tail queue: the node at the cursor has left the queue"
+)]
+fn a_cursor_does_not_step_off_a_node_that_left() {
+    step_off_a_node_that_left(Step::Next);
+}
+
+/// A cursor does not hand out the forward word of a node that left as the
+/// node after it.
+#[test]
+#[cfg_attr(miri, ignore = "Stacked Borrows refuses the cursor's borrow first")]
+#[should_panic(
+    expected = "tail queue: the node at the cursor has left the queue"
+)]
+fn a_cursor_does_not_peek_past_a_node_that_left() {
+    step_off_a_node_that_left(Step::PeekNext);
+}
+
+/// A cursor does not step back off a node that left, whose link is marked
+/// as on no queue, rather than read that mark as the previous link.
+#[test]
+#[cfg_attr(miri, ignore = "Stacked Borrows refuses the cursor's borrow first")]
+#[should_panic(
+    expected = "tail queue: the node at the cursor has left the queue"
+)]
+fn a_cursor_does_not_step_back_off_a_node_that_left() {
+    step_off_a_node_that_left(Step::Prev);
+}
+
+/// A counted queue of three nodes and a bitwise copy of its head, which
+/// then removes the middle node: every check passes, and the queue goes on
+/// counting three nodes over its two.
+fn counted_with_one_taken_by_a_copy(nodes: &Nodes) -> CountedQueue {
+    let mut queue = CountedQueue::new();
+    // SAFETY: the nodes are live and outlive the queue, and each is on no
+    // queue when pushed.
+    unsafe {
+        for i in 0..3 {
+            queue.push_back_ptr(nodes.at(i));
+        }
+    }
+    // SAFETY: a head is plain pointers, and the copy is never dropped.
+    let mut stale = ManuallyDrop::new(unsafe { ptr::read(&raw const queue) });
+    // SAFETY: the misuse: the copy is not the queue.
+    unsafe { stale.remove_ptr(nodes.at(1)) };
+    queue
+}
+
+/// A counted queue whose last node pops from the front counts that one
+/// node, rather than empty with a count left.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_counted_queue_does_not_empty_from_the_front_with_a_count_left() {
+    let nodes = Nodes::new(3);
+    let mut queue = counted_with_one_taken_by_a_copy(&nodes);
+    assert!(queue.pop_front_ptr().is_some(), "two nodes");
+    assert!(queue.pop_front_ptr().is_none(), "unreachable");
+}
+
+/// As above, from the back.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_counted_queue_does_not_empty_from_the_back_with_a_count_left() {
+    let nodes = Nodes::new(3);
+    let mut queue = counted_with_one_taken_by_a_copy(&nodes);
+    assert!(queue.pop_back_ptr().is_some(), "two nodes");
+    assert!(queue.pop_back_ptr().is_none(), "unreachable");
+}
+
+/// As above, through removals by address.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_counted_queue_does_not_empty_by_removal_with_a_count_left() {
+    let nodes = Nodes::new(3);
+    let mut queue = counted_with_one_taken_by_a_copy(&nodes);
+    // SAFETY: the first and last nodes are on the queue.
+    unsafe {
+        queue.remove_ptr(nodes.at(0));
+        queue.remove_ptr(nodes.at(2));
     }
 }
 
