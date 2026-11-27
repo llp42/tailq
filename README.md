@@ -25,8 +25,11 @@ queue never allocates or frees. The crate is `no_std` and needs no
   `back_mut`, `iter_mut` and `CursorMut::current_mut`, and checks at
   compile time that the payload lies apart from the link.
 - Debug builds check, before an operation writes anything, that each
-  link it touches is consistent with its neighbours and, at either end,
-  belongs to this queue, and that a pushed link is on no queue.
+  link it touches is consistent with its neighbours, that a node named
+  by address is on this queue, and that a pushed link is on no queue.
+  `contains_ptr` and `cursor_mut_find_ptr` look a node up by address
+  in safe code.
+- A counted queue's iterators are `ExactSizeIterator`.
 
 ```rust
 use tailq::{Link, TailQueue};
@@ -59,13 +62,17 @@ tailq::adapter!(pub RunLink = Thread { run_queue_node });
 pub type RunQueue<'nodes> = TailQueue<'nodes, RunLink>;
 pub type Frames<'nodes> = TailQueue<'nodes, FrameLink, Counted>;
 
-tailq::adapter!(pub SchedLink<P> = Thread<P> { sched.link } where P: Platform);
+tailq::adapter!(
+    pub SchedLink<'name, P, const CPUS: usize> = Thread<'name, P, CPUS> { sched.link }
+    where P: Platform
+);
 
 static RUN_QUEUE: Mutex<RunQueue<'static>> = Mutex::new(RunQueue::new());
 ```
 
 The field must be a `Link` itself: one that only derefs to a link, or
-sits in a packed node, fails to compile. One node can sit on several
+sits unaligned in a packed node, fails to compile. Only `adapter!`
+implements the `Adapter` trait. One node can sit on several
 queues at once by embedding one `Link` per queue, each with its adapter.
 
 Nothing points into the head: the first node's link holds a marker in
@@ -78,34 +85,46 @@ Rust 1.99.
 
 ## Development
 
-CI runs these checks on each PR:
+CI runs these checks on each PR. Every test runs through `.github/limit.sh`, which allows it 512 MiB of data memory
+and a timeout, after a build without the limit:
 
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked
-cargo test --locked
-cargo test --locked --release
-cargo test --locked -p tailq-bench --benches
 cargo doc --no-deps --locked
 cargo build --locked --target x86_64-unknown-none
-cargo +nightly test --locked --doc
-MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check" cargo +nightly miri test --locked
-MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo +nightly miri test --locked
-MIRIFLAGS=-Zmiri-strict-provenance cargo +nightly miri test --locked --release
-MIRIFLAGS=-Zmiri-strict-provenance cargo +nightly miri test --locked --target i686-unknown-linux-gnu
-MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo +nightly miri test --locked --target s390x-unknown-linux-gnu
+cargo test --locked --no-run && .github/limit.sh cargo test --locked
+cargo test --locked --release --no-run && .github/limit.sh cargo test --locked --release
+cargo test --locked -p tailq-bench --benches --no-run && .github/limit.sh cargo test --locked -p tailq-bench --benches
+nightly=+nightly-2026-10-04
+miri=".github/limit.sh cargo $nightly miri test --locked"
+strict=-Zmiri-strict-provenance
+.github/limit.sh cargo $nightly test --locked --doc
+MIRIFLAGS="$strict -Zmiri-symbolic-alignment-check" $miri
+MIRIFLAGS="$strict -Zmiri-tree-borrows" $miri
+MIRIFLAGS=$strict $miri --release
+MIRIFLAGS=$strict $miri --target i686-unknown-linux-gnu
+MIRIFLAGS="$strict -Zmiri-tree-borrows" $miri --target s390x-unknown-linux-gnu
 ```
 
 `Cargo.toml` denies every warning, Clippy's pedantic, nursery, cargo and restriction groups included, so these checks
 need no flags. CI runs them on the toolchains pinned in `.github/actions/setup-rust` and `.github/workflows/test.yml`.
 The no_std build needs its target: `rustup target add x86_64-unknown-none`. The doctests run on nightly as well,
 because only nightly rustdoc checks the error code of a `compile_fail` block. Miri runs on a 32-bit and a big-endian
-target too.
+target too, and runs the thread tests under sixteen seeds, one process each.
+
+Coverage must be complete: every code region of `src/` runs in the tests, in some instantiation of its generic code.
+`.github/coverage.py` checks it on the JSON of `cargo llvm-cov report --json`, after the tests ran under
+`cargo llvm-cov show-env`.
+
+Every problem a review found has a test: `tests/regressions.rs` names each one, `tests/misuse.rs` holds the misuse
+that debug builds catch, and `src/compile_fail.rs` what must not compile.
 
 The benches are in their own crate, `bench/`, so that criterion is no dependency of `tailq`: `cargo bench -p
 tailq-bench`.
 
-CI also packages the crate, builds the library on Rust 1.99, the minimum, and lints the Markdown with markdownlint-cli2.
+CI also packages the crate, builds the library on Rust 1.99.0, the minimum, and lints the Markdown with
+markdownlint-cli2.
 
 ## License
 

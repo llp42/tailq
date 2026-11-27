@@ -15,7 +15,7 @@
 //! - `round_robin`: a scheduler's loop, pop the front and push it back.
 //! - `deque`: pop at one end and push at the other, alternating ends.
 //! - `lru`: touch a node by address, removing it and pushing it at the
-//!   front, in an order that visits every node.
+//!   front, picked at random, so that most removals are from the middle.
 //! - `walk` and `walk_rev`: walk the queue eight times, each way.
 //! - `walk_shuffled`: the same forward, over nodes linked in a shuffled
 //!   order, so that each step lands on a cold line once the queue
@@ -44,6 +44,17 @@ const SIZES: [usize; 3] = [1 << 4, 1 << 10, 1 << 16];
 
 const fn mix(hash: u64, key: u64) -> u64 {
     hash.wrapping_mul(31).wrapping_add(key)
+}
+
+/// Returns the next of a `SplitMix64` sequence of indices below `n`.
+fn random_index(state: &mut u64, n: usize) -> usize {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut mixed = *state;
+    mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    let bound = u64::try_from(n).unwrap_or(u64::MAX);
+    let index = (mixed ^ (mixed >> 31)).checked_rem(bound).unwrap_or(0);
+    usize::try_from(index).unwrap_or(0)
 }
 
 /// The `i`th index of a permutation of `0..n`, for a power-of-two `n`.
@@ -120,11 +131,13 @@ fn lru(nodes: &mut [Node]) -> u64 {
         // nothing else reaches them, and they are on no queue.
         unsafe { queue.push_back_ptr(NonNull::new_unchecked(base.add(i))) };
     }
-    for i in 0..STEADY_ROUNDS.wrapping_mul(n) {
+    let mut state = 0;
+    for _ in 0..STEADY_ROUNDS.wrapping_mul(n) {
         // SAFETY: the index is in bounds, the node is on this queue, and
         // it rejoins the queue once it has left.
         unsafe {
-            let node = NonNull::new_unchecked(base.add(permuted(i, n)));
+            let node =
+                NonNull::new_unchecked(base.add(random_index(&mut state, n)));
             queue.remove_ptr(node);
             queue.push_front_ptr(node);
         }

@@ -7,19 +7,30 @@ on:
 permissions:
   contents: read
 
+# A new push supersedes the runs of the one before.
+concurrency:
+  group: test-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Every test runs through .github/limit.sh: at most 512 MiB of data memory and a timeout. Each job builds first,
+# without the limit, and then runs what it built under it.
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
         with:
           targets: x86_64-unknown-none
-      - run: cargo test --locked
+      - run: cargo test --locked --no-run
+      - run: .github/limit.sh cargo test --locked
       # Release builds leave out the debug checks but keep the unlinked mark, which the tests read.
-      - run: cargo test --locked --release
+      - run: cargo test --locked --release --no-run
+      - run: .github/limit.sh cargo test --locked --release
       # Each benchmark once, in criterion's test mode, so that the benches keep building and running.
-      - run: cargo test --locked -p tailq-bench --benches
+      - run: cargo test --locked -p tailq-bench --benches --no-run
+      - run: .github/limit.sh cargo test --locked -p tailq-bench --benches
       # The crate as cargo publish uploads it, built on its own, so that a release cannot fail at the upload.
       - run: cargo package --locked -p tailq
       # no_std: a bare-metal target has no std to link.
@@ -27,6 +38,7 @@ jobs:
 
   miri:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -48,6 +60,12 @@ jobs:
           - name: s390x
             flags: -Zmiri-strict-provenance -Zmiri-tree-borrows
             args: --target s390x-unknown-linux-gnu
+          # The thread tests under sixteen schedules rather than one, one process each: -Zmiri-many-seeds runs
+          # them all at once, which would not fit in the memory limit.
+          - name: threads
+            flags: -Zmiri-strict-provenance
+            args: --test raw
+            seeds: 16
     name: miri (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v7
@@ -57,25 +75,58 @@ jobs:
         with:
           toolchain: nightly-2026-10-04
           components: miri,rust-src
-      - run: cargo miri test --locked ${{ matrix.args }}
+      # Builds Miri's sysroot and the tests, which needs more memory than running them.
+      - run: cargo miri test --locked --no-run ${{ matrix.args }}
         env:
           MIRIFLAGS: ${{ matrix.flags }}
+      - run: |
+          for seed in $(seq 0 $((${SEEDS:-1} - 1))); do
+            MIRIFLAGS="$FLAGS${SEEDS:+ -Zmiri-seed=$seed}" .github/limit.sh cargo miri test --locked $ARGS
+          done
+        env:
+          FLAGS: ${{ matrix.flags }}
+          ARGS: ${{ matrix.args }}
+          SEEDS: ${{ matrix.seeds }}
+          LIMIT_SECONDS: 1200
 
   compile-fail:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       # Stable rustdoc only checks that a compile_fail doctest fails; nightly also checks its error code.
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: nightly-2026-10-04
-      - run: cargo test --locked --doc
+      - run: cargo build --locked --lib
+      - run: .github/limit.sh cargo test --locked --doc
+
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: llvm-tools
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      # Every code region of src/ must run in the tests, in debug builds, where the debug checks are compiled in.
+      - run: |
+          source <(cargo llvm-cov show-env --export-prefix)
+          cargo llvm-cov clean --workspace
+          cargo test --locked --no-run
+          .github/limit.sh cargo test --locked
+          cargo llvm-cov report --json | python3 .github/coverage.py
 
   msrv:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      # The rust-version of Cargo.toml, read with the runner's own cargo, so that this job cannot drift from it.
+      # The rust-version of Cargo.toml, read with the runner's own cargo, so that this job cannot drift from it. The
+      # .0 release exactly: rustup resolves a bare 1.99 to the newest 1.99 patch.
       - id: msrv
         run: |
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "tailq") | .rust_version // empty')
@@ -83,6 +134,7 @@ jobs:
             echo "::error::Cargo.toml sets no rust-version"
             exit 1
           fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+$ ]] && version="$version.0"
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/setup-rust
         with:
