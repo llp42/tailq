@@ -11,8 +11,7 @@
 
 use core::convert::Infallible;
 use core::marker::PhantomData;
-use core::mem::{offset_of, size_of, zeroed};
-use core::pin::pin;
+use core::mem::{offset_of, size_of, swap, take, zeroed};
 use core::ptr::NonNull;
 use tailq::{Adapter, Counted, Field, Link, TailQueue};
 
@@ -58,7 +57,7 @@ fn cursor_keys(queue: &Queue<'_>) -> Vec<u32> {
 
 #[test]
 fn empty_queue_has_no_ends() {
-    let queue = pin!(Queue::new());
+    let queue = Queue::new();
     assert!(queue.is_empty());
     assert!(queue.front().is_none());
     assert!(queue.back().is_none());
@@ -71,10 +70,10 @@ fn empty_queue_has_no_ends() {
 #[test]
 fn pushes_order_both_ends() {
     let (mut one, mut two, mut three) = (node(1), node(2), node(3));
-    let mut queue = pin!(Queue::new());
-    queue.as_mut().push_back(&mut two);
-    queue.as_mut().push_front(&mut one);
-    queue.as_mut().push_back(&mut three);
+    let mut queue = Queue::new();
+    queue.push_back(&mut two);
+    queue.push_front(&mut one);
+    queue.push_back(&mut three);
     assert!(!queue.is_empty());
     assert_eq!(queue.front().map(|node| node.key), Some(1));
     assert_eq!(queue.back().map(|node| node.key), Some(3));
@@ -86,9 +85,9 @@ fn pushes_order_both_ends() {
 #[test]
 fn iterator_ends_meet_once() {
     let mut nodes: Vec<Node> = (0..5).map(node).collect();
-    let mut queue = pin!(Queue::new());
+    let mut queue = Queue::new();
     for node in &mut nodes {
-        queue.as_mut().push_back(node);
+        queue.push_back(node);
     }
     let mut iter = queue.iter();
     let mut seen = Vec::new();
@@ -106,12 +105,12 @@ fn iterator_ends_meet_once() {
 #[test]
 fn draining_from_the_front_hands_nodes_back() {
     let mut nodes: Vec<Node> = (0..4).map(node).collect();
-    let mut queue = pin!(Queue::new());
+    let mut queue = Queue::new();
     for node in &mut nodes {
-        queue.as_mut().push_back(node);
+        queue.push_back(node);
     }
     let mut drained = Vec::new();
-    while let Some(node) = queue.as_mut().cursor_front_mut().remove_current() {
+    while let Some(node) = queue.cursor_front_mut().remove_current() {
         node.key = node.key.wrapping_add(10);
         drained.push(node.key);
     }
@@ -122,9 +121,9 @@ fn draining_from_the_front_hands_nodes_back() {
 #[test]
 fn cursor_moves_through_the_ghost() {
     let (mut one, mut two) = (node(1), node(2));
-    let mut queue = pin!(Queue::new());
-    queue.as_mut().push_back(&mut one);
-    queue.as_mut().push_back(&mut two);
+    let mut queue = Queue::new();
+    queue.push_back(&mut one);
+    queue.push_back(&mut two);
 
     let mut cursor = queue.cursor_back();
     assert_eq!(cursor.current().map(|node| node.key), Some(2));
@@ -147,9 +146,9 @@ fn cursor_moves_through_the_ghost() {
 fn cursor_inserts_around_nodes_and_the_ghost() {
     let (mut one, mut two, mut three) = (node(1), node(2), node(3));
     let (mut four, mut five) = (node(4), node(5));
-    let mut queue = pin!(Queue::new());
+    let mut queue = Queue::new();
     {
-        let mut cursor = queue.as_mut().cursor_front_mut();
+        let mut cursor = queue.cursor_front_mut();
         cursor.insert_after(&mut three);
         cursor.insert_before(&mut five);
         cursor.move_next();
@@ -167,17 +166,16 @@ fn cursor_inserts_around_nodes_and_the_ghost() {
 #[test]
 fn removing_the_back_keeps_the_tail() {
     let (mut one, mut two, mut three) = (node(1), node(2), node(3));
-    let mut queue = pin!(Queue::new());
-    queue.as_mut().push_back(&mut one);
-    queue.as_mut().push_back(&mut two);
+    let mut queue = Queue::new();
+    queue.push_back(&mut one);
+    queue.push_back(&mut two);
     let removed = queue
-        .as_mut()
         .cursor_back_mut()
         .remove_current()
         .map(|node| node.key);
     assert_eq!(removed, Some(2));
     assert_eq!(queue.back().map(|node| node.key), Some(1));
-    queue.as_mut().push_back(&mut three);
+    queue.push_back(&mut three);
     assert_eq!(keys(&queue), [1, 3]);
     assert_eq!(keys_rev(&queue), [3, 1]);
 }
@@ -185,12 +183,12 @@ fn removing_the_back_keeps_the_tail() {
 #[test]
 fn removing_moves_the_cursor_on() {
     let mut nodes: Vec<Node> = (0..4).map(node).collect();
-    let mut queue = pin!(Queue::new());
+    let mut queue = Queue::new();
     for node in &mut nodes {
-        queue.as_mut().push_back(node);
+        queue.push_back(node);
     }
     {
-        let mut cursor = queue.as_mut().cursor_front_mut();
+        let mut cursor = queue.cursor_front_mut();
         cursor.move_next();
         let removed = cursor.remove_current().map(|node| node.key);
         assert_eq!(removed, Some(1));
@@ -208,12 +206,12 @@ fn removing_moves_the_cursor_on() {
 fn replace_swaps_the_node_in_place() {
     let (mut one, mut two, mut three) = (node(1), node(2), node(3));
     let (mut middle, mut last, mut spare) = (node(20), node(30), node(99));
-    let mut queue = pin!(Queue::new());
-    queue.as_mut().push_back(&mut one);
-    queue.as_mut().push_back(&mut two);
-    queue.as_mut().push_back(&mut three);
+    let mut queue = Queue::new();
+    queue.push_back(&mut one);
+    queue.push_back(&mut two);
+    queue.push_back(&mut three);
     {
-        let mut cursor = queue.as_mut().cursor_front_mut();
+        let mut cursor = queue.cursor_front_mut();
         cursor.move_next();
         let second = cursor
             .replace_current(&mut middle)
@@ -242,40 +240,40 @@ fn replace_swaps_the_node_in_place() {
 fn append_moves_every_node() {
     let mut left: Vec<Node> = (0..3).map(node).collect();
     let mut right: Vec<Node> = (3..6).map(node).collect();
-    let mut first = pin!(Queue::new());
-    let mut second = pin!(Queue::new());
+    let mut first = Queue::new();
+    let mut second = Queue::new();
 
-    first.as_mut().append(second.as_mut());
+    first.append(&mut second);
     assert!(first.is_empty());
     assert!(second.is_empty());
 
     for node in &mut right {
-        second.as_mut().push_back(node);
+        second.push_back(node);
     }
-    first.as_mut().append(second.as_mut());
+    first.append(&mut second);
     assert!(second.is_empty());
     assert_eq!(keys(&first), [3, 4, 5]);
 
     for node in &mut left {
-        second.as_mut().push_back(node);
+        second.push_back(node);
     }
-    second.as_mut().append(first.as_mut());
+    second.append(&mut first);
     assert!(first.is_empty());
     assert_eq!(keys(&second), [0, 1, 2, 3, 4, 5]);
     assert_eq!(keys_rev(&second), [5, 4, 3, 2, 1, 0]);
 
-    second.as_mut().append(first.as_mut());
+    second.append(&mut first);
     assert_eq!(keys(&second), [0, 1, 2, 3, 4, 5]);
 }
 
 #[test]
 fn emptied_donor_takes_new_nodes() {
     let (mut one, mut two) = (node(1), node(2));
-    let mut first = pin!(Queue::new());
-    let mut second = pin!(Queue::new());
-    second.as_mut().push_back(&mut one);
-    first.as_mut().append(second.as_mut());
-    second.as_mut().push_back(&mut two);
+    let mut first = Queue::new();
+    let mut second = Queue::new();
+    second.push_back(&mut one);
+    first.append(&mut second);
+    second.push_back(&mut two);
     assert_eq!(keys(&first), [1]);
     assert_eq!(keys(&second), [2]);
     assert_eq!(keys_rev(&second), [2]);
@@ -287,25 +285,25 @@ fn nodes_by_address_leave_and_rejoin() {
     let base = nodes.as_mut_ptr();
     // SAFETY: every index is in bounds.
     let at = |i: usize| unsafe { NonNull::new_unchecked(base.add(i)) };
-    let mut queue = pin!(Queue::new());
+    let mut queue = Queue::new();
     for i in 0..5 {
         // SAFETY: the nodes outlive the queue, nothing else reaches them
         // while they are on it, and each is on no queue.
-        unsafe { queue.as_mut().push_back_ptr(at(i)) };
+        unsafe { queue.push_back_ptr(at(i)) };
     }
     // SAFETY: each node is on this queue when it is removed, and on no
     // queue when it is pushed again.
     unsafe {
-        queue.as_mut().remove_ptr(at(2));
-        queue.as_mut().remove_ptr(at(0));
-        queue.as_mut().remove_ptr(at(4));
+        queue.remove_ptr(at(2));
+        queue.remove_ptr(at(0));
+        queue.remove_ptr(at(4));
         assert_eq!(keys(&queue), [1, 3]);
         assert_eq!(keys_rev(&queue), [3, 1]);
-        queue.as_mut().push_front_ptr(at(4));
-        queue.as_mut().push_back_ptr(at(0));
-        queue.as_mut().remove_ptr(at(1));
-        queue.as_mut().remove_ptr(at(3));
-        queue.as_mut().push_back_ptr(at(2));
+        queue.push_front_ptr(at(4));
+        queue.push_back_ptr(at(0));
+        queue.remove_ptr(at(1));
+        queue.remove_ptr(at(3));
+        queue.push_back_ptr(at(2));
     }
     assert_eq!(keys(&queue), [4, 0, 2]);
     assert_eq!(keys_rev(&queue), [2, 0, 4]);
@@ -317,18 +315,18 @@ fn clear_lets_nodes_be_pushed_again() {
     let base = nodes.as_mut_ptr();
     // SAFETY: every index is in bounds.
     let at = |i: usize| unsafe { NonNull::new_unchecked(base.add(i)) };
-    let mut queue = pin!(Queue::new());
+    let mut queue = Queue::new();
     // SAFETY: the nodes outlive the queue, nothing else reaches them
     // while they are on it, and `clear` takes them all off before they
     // are pushed again.
     unsafe {
         for i in 0..3 {
-            queue.as_mut().push_back_ptr(at(i));
+            queue.push_back_ptr(at(i));
         }
-        queue.as_mut().clear();
+        queue.clear();
         assert!(queue.is_empty());
         for i in 0..3 {
-            queue.as_mut().push_front_ptr(at(i));
+            queue.push_front_ptr(at(i));
         }
     }
     assert_eq!(keys(&queue), [2, 1, 0]);
@@ -340,22 +338,22 @@ fn cursor_from_address_reaches_the_node() {
     let base = nodes.as_mut_ptr();
     // SAFETY: every index is in bounds.
     let at = |i: usize| unsafe { NonNull::new_unchecked(base.add(i)) };
-    let mut queue = pin!(Queue::new());
+    let mut queue = Queue::new();
     for i in 0..4 {
         // SAFETY: the nodes outlive the queue, nothing else reaches them
         // while they are on it, and each is on no queue.
-        unsafe { queue.as_mut().push_back_ptr(at(i)) };
+        unsafe { queue.push_back_ptr(at(i)) };
     }
     {
         // SAFETY: the node at index 2 is on this queue.
-        let mut cursor = unsafe { queue.as_mut().cursor_mut_from_ptr(at(2)) };
+        let mut cursor = unsafe { queue.cursor_mut_from_ptr(at(2)) };
         assert_eq!(cursor.peek_prev().map(|node| node.key), Some(1));
         let removed = cursor.remove_current().map(|node| node.key);
         assert_eq!(removed, Some(2));
         assert_eq!(cursor.current().map(|node| node.key), Some(3));
         // SAFETY: the node at index 2 has left the queue.
         let old = unsafe { cursor.replace_current_ptr(at(2)) };
-        assert_eq!(old.map(|node| node.key), Some(3));
+        assert_eq!(old, Some(at(3)));
         // SAFETY: the node at index 3 has left the queue.
         unsafe { cursor.insert_before_ptr(at(3)) };
         cursor.move_next();
@@ -371,11 +369,11 @@ fn cursor_from_address_reaches_the_node() {
 fn current_ptr_writes_through_the_push_access() {
     let (mut one, mut two) = (node(1), node(2));
     let front = {
-        let mut queue = pin!(Queue::new());
-        queue.as_mut().push_back(&mut one);
-        queue.as_mut().push_back(&mut two);
+        let mut queue = Queue::new();
+        queue.push_back(&mut one);
+        queue.push_back(&mut two);
         {
-            let mut cursor = queue.as_mut().cursor_front_mut();
+            let mut cursor = queue.cursor_front_mut();
             while let Some(at) = cursor.current_ptr() {
                 // SAFETY: the node was pushed as `&mut`, so its pointer
                 // may write the key, and no `&Node` is alive meanwhile.
@@ -414,16 +412,16 @@ fn one_node_rides_two_queues() {
     let base = nodes.as_mut_ptr();
     // SAFETY: every index is in bounds.
     let at = |i: usize| unsafe { NonNull::new_unchecked(base.add(i)) };
-    let mut ready = pin!(Ready::new());
-    let mut all = pin!(All::new());
+    let mut ready = Ready::new();
+    let mut all = All::new();
     // SAFETY: the nodes outlive both queues and are reached only through
     // them, and each link joins one queue.
     unsafe {
         for i in 0..4 {
-            all.as_mut().push_back_ptr(at(i));
+            all.push_back_ptr(at(i));
         }
-        ready.as_mut().push_front_ptr(at(1));
-        ready.as_mut().push_front_ptr(at(3));
+        ready.push_front_ptr(at(1));
+        ready.push_front_ptr(at(3));
     }
     let all_keys: Vec<u32> = all.iter().map(|node| node.key).collect();
     let ready_keys: Vec<u32> = ready.iter().map(|node| node.key).collect();
@@ -483,9 +481,9 @@ fn hand_written_adapter_links_a_generic_node() {
             sched: Sched { link: Link::new() },
         })
         .collect();
-    let mut queue = pin!(TailQueue::<ThreadLink<Pc>>::new());
+    let mut queue = TailQueue::<ThreadLink<Pc>>::new();
     for thread in &mut threads {
-        queue.as_mut().push_front(thread);
+        queue.push_front(thread);
     }
     let ids: Vec<u32> = queue.iter().map(|thread| thread.id).collect();
     assert_eq!(ids, [2, 1, 0]);
@@ -495,19 +493,37 @@ fn hand_written_adapter_links_a_generic_node() {
 #[test]
 fn heads_in_an_array_stay_apart() {
     let mut nodes: Vec<Node> = (0..6).map(node).collect();
-    let mut heads = pin!([const { Queue::new() }; 3]);
-    for (i, node) in nodes.iter_mut().enumerate() {
-        // SAFETY: the index is in bounds, an element of a pinned array is
-        // pinned too, and nothing moves it out.
-        let lane = unsafe {
-            heads.as_mut().map_unchecked_mut(|all| {
-                all.get_unchecked_mut(i.wrapping_rem(3))
-            })
-        };
-        lane.push_back(node);
+    let mut heads = [const { Queue::new() }; 3];
+    for round in nodes.chunks_mut(3) {
+        for (node, lane) in round.iter_mut().zip(&mut heads) {
+            lane.push_back(node);
+        }
     }
     let lanes: Vec<Vec<u32>> = heads.iter().map(keys).collect();
     assert_eq!(lanes, [[0, 3], [1, 4], [2, 5]]);
+}
+
+#[test]
+fn full_heads_move() {
+    let mut nodes: Vec<Node> = (0..4).map(node).collect();
+    let mut queue = Queue::new();
+    for node in &mut nodes {
+        queue.push_back(node);
+    }
+    let mut other = Queue::new();
+    swap(&mut queue, &mut other);
+    assert!(queue.is_empty());
+    let mut boxed = Box::new(take(&mut other));
+    assert_eq!(keys(&boxed), [0, 1, 2, 3]);
+    let first = boxed.pop_front().map(|node| node.key);
+    assert_eq!(first, Some(0));
+    let mut heads = vec![*boxed];
+    heads.push(Queue::new());
+    let last = heads.first_mut().and_then(Queue::pop_back);
+    assert_eq!(last.map(|node| node.key), Some(3));
+    let moved = heads.swap_remove(0);
+    assert_eq!(keys(&moved), [1, 2]);
+    assert_eq!(keys_rev(&moved), [2, 1]);
 }
 
 #[test]
@@ -544,20 +560,20 @@ fn heads_are_two_words_or_three_counted() {
 fn links_know_when_they_are_on_a_queue() {
     let (mut one, mut two, mut three) = (node(1), node(2), node(3));
     let mut spare = node(4);
-    let mut queue = pin!(Queue::new());
-    queue.as_mut().push_back(&mut one);
-    queue.as_mut().push_back(&mut two);
-    queue.as_mut().push_back(&mut three);
+    let mut queue = Queue::new();
+    queue.push_back(&mut one);
+    queue.push_back(&mut two);
+    queue.push_back(&mut three);
     assert!(queue.iter().all(|node| node.link.is_linked()));
 
-    let popped = queue.as_mut().pop_front();
+    let popped = queue.pop_front();
     assert!(popped.is_some_and(|node| !node.link.is_linked()));
     let replaced = {
-        let mut cursor = queue.as_mut().cursor_front_mut();
+        let mut cursor = queue.cursor_front_mut();
         cursor.replace_current(&mut spare)
     };
     assert!(replaced.is_ok_and(|node| !node.link.is_linked()));
-    let removed = queue.as_mut().cursor_back_mut().remove_current();
+    let removed = queue.cursor_back_mut().remove_current();
     assert!(removed.is_some_and(|node| !node.link.is_linked()));
     assert_eq!(keys(&queue), [4]);
 }
@@ -571,20 +587,20 @@ fn clear_and_drop_unmark_every_link() {
     // SAFETY: the node at `i` is live; nothing writes it meanwhile.
     let linked = |i: usize| unsafe { at(i).as_ref() }.link.is_linked();
     {
-        let mut queue = pin!(Queue::new());
+        let mut queue = Queue::new();
         // SAFETY: the nodes outlive the queue and are reached only
         // through it, and each is on no queue when pushed.
         unsafe {
-            queue.as_mut().push_back_ptr(at(0));
-            queue.as_mut().push_back_ptr(at(1));
+            queue.push_back_ptr(at(0));
+            queue.push_back_ptr(at(1));
         }
-        queue.as_mut().clear();
+        queue.clear();
         assert!(queue.is_empty());
         assert!(!linked(0) && !linked(1));
         // SAFETY: as above; `clear` took both nodes off.
         unsafe {
-            queue.as_mut().push_back_ptr(at(1));
-            queue.as_mut().push_back_ptr(at(2));
+            queue.push_back_ptr(at(1));
+            queue.push_back_ptr(at(2));
         }
         assert!(linked(1) && linked(2));
     }
@@ -597,45 +613,44 @@ fn counted_queue_keeps_its_length() {
     let base = nodes.as_mut_ptr();
     // SAFETY: every index is in bounds.
     let at = |i: usize| unsafe { NonNull::new_unchecked(base.add(i)) };
-    let mut queue = pin!(CountedQueue::new());
-    let mut other = pin!(CountedQueue::new());
+    let mut queue = CountedQueue::new();
+    let mut other = CountedQueue::new();
     // SAFETY: the nodes outlive both queues and are reached only through
     // them; each is pushed while on no queue and removed while on `queue`.
     unsafe {
-        queue.as_mut().push_back_ptr(at(0));
-        queue.as_mut().push_front_ptr(at(1));
-        queue.as_mut().cursor_front_mut().insert_after_ptr(at(2));
-        queue.as_mut().cursor_back_mut().insert_before_ptr(at(3));
+        queue.push_back_ptr(at(0));
+        queue.push_front_ptr(at(1));
+        queue.cursor_front_mut().insert_after_ptr(at(2));
+        queue.cursor_back_mut().insert_before_ptr(at(3));
         assert_eq!(queue.len(), 4);
-        let replaced =
-            queue.as_mut().cursor_front_mut().replace_current_ptr(at(4));
-        assert_eq!(replaced.map(|node| node.key), Some(1));
+        let replaced = queue.cursor_front_mut().replace_current_ptr(at(4));
+        assert_eq!(replaced, Some(at(1)));
         assert_eq!(queue.len(), 4);
-        queue.as_mut().remove_ptr(at(2));
+        queue.remove_ptr(at(2));
         assert_eq!(queue.len(), 3);
-        other.as_mut().push_back_ptr(at(5));
+        other.push_back_ptr(at(5));
     }
-    queue.as_mut().append(other.as_mut());
+    queue.append(&mut other);
     assert_eq!((queue.len(), other.len()), (4, 0));
     assert_eq!(queue.iter().count(), 4);
-    assert!(queue.as_mut().pop_back_ptr().is_some());
+    assert!(queue.pop_back_ptr().is_some());
     assert_eq!(queue.len(), 3);
-    queue.as_mut().clear();
+    queue.clear();
     assert_eq!(queue.len(), 0);
 }
 
 #[test]
 fn pops_take_both_ends() {
     let mut nodes: Vec<Node> = (0..4).map(node).collect();
-    let mut queue = pin!(Queue::new());
+    let mut queue = Queue::new();
     for node in &mut nodes {
-        queue.as_mut().push_back(node);
+        queue.push_back(node);
     }
-    let front = queue.as_mut().pop_front().map(|node| node.key);
-    let back = queue.as_mut().pop_back().map(|node| node.key);
+    let front = queue.pop_front().map(|node| node.key);
+    let back = queue.pop_back().map(|node| node.key);
     assert_eq!((front, back), (Some(0), Some(3)));
-    let front_ptr = queue.as_mut().pop_front_ptr();
-    let back_ptr = queue.as_mut().pop_back_ptr();
+    let front_ptr = queue.pop_front_ptr();
+    let back_ptr = queue.pop_back_ptr();
     // SAFETY: the popped nodes are live and on no queue.
     let keys_popped = unsafe {
         (
@@ -644,8 +659,8 @@ fn pops_take_both_ends() {
         )
     };
     assert_eq!(keys_popped, (Some(1), Some(2)));
-    assert!(queue.as_mut().pop_front_ptr().is_none());
-    assert!(queue.as_mut().pop_back().is_none());
+    assert!(queue.pop_front_ptr().is_none());
+    assert!(queue.pop_back().is_none());
 }
 
 #[test]
@@ -654,11 +669,11 @@ fn pointers_from_the_queue_write_the_nodes() {
     let base = nodes.as_mut_ptr();
     // SAFETY: every index is in bounds.
     let at = |i: usize| unsafe { NonNull::new_unchecked(base.add(i)) };
-    let mut queue = pin!(Queue::new());
+    let mut queue = Queue::new();
     for i in 0..4 {
         // SAFETY: the nodes outlive the queue, nothing else reaches them
         // while they are on it, and each is on no queue.
-        unsafe { queue.as_mut().push_back_ptr(at(i)) };
+        unsafe { queue.push_back_ptr(at(i)) };
     }
     assert_eq!(queue.front_ptr(), Some(at(0)));
     assert_eq!(queue.back_ptr(), Some(at(3)));
@@ -684,7 +699,7 @@ fn pointers_from_the_queue_write_the_nodes() {
 
     {
         // SAFETY: the node at index 1 is on this queue.
-        let mut cursor = unsafe { queue.as_mut().cursor_mut_from_ptr(at(1)) };
+        let mut cursor = unsafe { queue.cursor_mut_from_ptr(at(1)) };
         assert_eq!(cursor.peek_next_ptr(), Some(at(2)));
         assert_eq!(cursor.remove_current_ptr(), Some(at(1)));
         assert_eq!(cursor.current_ptr(), Some(at(2)));
@@ -699,13 +714,13 @@ fn pointers_from_the_queue_write_the_nodes() {
 fn a_linked_node_cannot_join_again() {
     let mut nodes: Vec<Node> = (0..1).map(node).collect();
     let base = nodes.as_mut_ptr();
-    let mut queue = pin!(Queue::new());
-    let mut other = pin!(Queue::new());
+    let mut queue = Queue::new();
+    let mut other = Queue::new();
     // SAFETY: the node is live and outlives both queues; the second push
     // is the misuse under test, caught before it writes anything.
     unsafe {
         let at = NonNull::new_unchecked(base);
-        queue.as_mut().push_back_ptr(at);
-        other.as_mut().push_back_ptr(at);
+        queue.push_back_ptr(at);
+        other.push_back_ptr(at);
     }
 }

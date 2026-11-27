@@ -17,7 +17,6 @@
 //!   them all onto the first.
 
 use core::hint::black_box;
-use core::pin::{Pin, pin};
 use core::ptr::NonNull;
 use core::time::Duration;
 use criterion::measurement::WallTime;
@@ -58,45 +57,22 @@ const fn node(key: u64) -> Node {
     }
 }
 
-/// Returns the `i`th head of a pinned array of heads.
-fn lane<Q, const N: usize>(heads: Pin<&mut [Q; N]>, i: usize) -> Pin<&mut Q> {
-    // SAFETY: an element of a pinned array is pinned too, and nothing
-    // moves it out.
-    unsafe { heads.map_unchecked_mut(|all| all.get_unchecked_mut(i)) }
-}
-
-/// Returns the first head and the `w`th of a pinned array of heads.
-fn first_and<Q, const N: usize>(
-    heads: Pin<&mut [Q; N]>,
-    w: usize,
-) -> (Pin<&mut Q>, Pin<&mut Q>) {
-    // SAFETY: elements of a pinned array are pinned too, nothing moves
-    // them out, and for `w > 0` the two borrows are disjoint.
-    unsafe {
-        let (first, rest) = heads.get_unchecked_mut().split_at_mut(w);
-        (
-            Pin::new_unchecked(first.get_unchecked_mut(0)),
-            Pin::new_unchecked(rest.get_unchecked_mut(0)),
-        )
-    }
-}
-
 fn fifo(nodes: &mut [Node]) -> u64 {
-    let mut queue = pin!(Queue::new());
+    let mut queue = Queue::new();
     for node in nodes {
-        queue.as_mut().push_back(node);
+        queue.push_back(node);
     }
     let mut hash = 0;
-    while let Some(node) = queue.as_mut().cursor_front_mut().remove_current() {
+    while let Some(node) = queue.cursor_front_mut().remove_current() {
         hash = mix(hash, node.key);
     }
     hash
 }
 
 fn walk(nodes: &mut [Node]) -> u64 {
-    let mut queue = pin!(Queue::new());
+    let mut queue = Queue::new();
     for node in nodes {
-        queue.as_mut().push_back(node);
+        queue.push_back(node);
     }
     let mut hash = 0;
     for _ in 0..WALK_ROUNDS {
@@ -106,9 +82,9 @@ fn walk(nodes: &mut [Node]) -> u64 {
 }
 
 fn walk_rev(nodes: &mut [Node]) -> u64 {
-    let mut queue = pin!(Queue::new());
+    let mut queue = Queue::new();
     for node in nodes {
-        queue.as_mut().push_back(node);
+        queue.push_back(node);
     }
     let mut hash = 0;
     for _ in 0..WALK_ROUNDS {
@@ -123,14 +99,12 @@ fn walk_rev(nodes: &mut [Node]) -> u64 {
 fn churn(nodes: &mut [Node]) -> u64 {
     let n = nodes.len();
     let base = nodes.as_mut_ptr();
-    let mut queue = pin!(Queue::new());
+    let mut queue = Queue::new();
     for i in 0..n {
         // SAFETY: the index is in bounds; the nodes outlive the queue,
         // nothing else reaches them, and they are on no queue.
         unsafe {
-            queue
-                .as_mut()
-                .push_back_ptr(NonNull::new_unchecked(base.add(i)));
+            queue.push_back_ptr(NonNull::new_unchecked(base.add(i)));
         }
     }
     for i in 0..CHURN_OPS {
@@ -138,25 +112,27 @@ fn churn(nodes: &mut [Node]) -> u64 {
         // it rejoins the queue once it has left.
         unsafe {
             let node = NonNull::new_unchecked(base.add(churn_index(i, n)));
-            queue.as_mut().remove_ptr(node);
-            queue.as_mut().push_front_ptr(node);
+            queue.remove_ptr(node);
+            queue.push_front_ptr(node);
         }
     }
     queue.iter().fold(0, |acc, node| mix(acc, node.key))
 }
 
 fn concat(nodes: &mut [Node]) -> u64 {
-    let mut heads = pin!([const { Queue::new() }; CONCAT_WAYS]);
-    for (i, node) in nodes.iter_mut().enumerate() {
-        lane(heads.as_mut(), i.wrapping_rem(CONCAT_WAYS)).push_back(node);
+    let mut heads = [const { Queue::new() }; CONCAT_WAYS];
+    for round in nodes.chunks_mut(CONCAT_WAYS) {
+        for (node, lane) in round.iter_mut().zip(&mut heads) {
+            lane.push_back(node);
+        }
     }
-    for w in 1..CONCAT_WAYS {
-        let (first, other) = first_and(heads.as_mut(), w);
+    let Some((first, rest)) = heads.split_first_mut() else {
+        return 0;
+    };
+    for other in rest {
         first.append(other);
     }
-    lane(heads.as_mut(), 0)
-        .iter()
-        .fold(0, |acc, node| mix(acc, node.key))
+    first.iter().fold(0, |acc, node| mix(acc, node.key))
 }
 
 /// Times `run` at every size in the group `name`, each call over fresh

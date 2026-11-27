@@ -32,15 +32,11 @@ impl<'head, 'nodes, A: Adapter, C: Count> Cursor<'head, 'nodes, A, C> {
     #[inline]
     pub fn current(&self) -> Option<&'head A::Node> {
         // SAFETY: a node stays live while it is on the queue.
-        self.current.map(|link| unsafe { A::node(link).as_ref() })
+        self.current_ptr().map(|node| unsafe { node.as_ref() })
     }
 
-    /// Returns a pointer to the node at the cursor, or `None` at the ghost.
-    ///
-    /// The pointer is the one the node was pushed with, so it may be
-    /// written through wherever that push allowed it, unlike one made from
-    /// [`current`](Self::current).  It names the node only while the node
-    /// is on the queue, and its link must never be written through it.
+    /// Returns the pointer the node at the cursor was pushed with, or
+    /// `None` at the ghost, as [`TailQueue::front_ptr`] does.
     #[must_use]
     #[inline]
     pub fn current_ptr(&self) -> Option<NonNull<A::Node>> {
@@ -51,10 +47,10 @@ impl<'head, 'nodes, A: Adapter, C: Count> Cursor<'head, 'nodes, A, C> {
     /// Moves to the next node: from the last node to the ghost, and from
     /// the ghost to the front.
     #[inline]
-    pub fn move_next(&mut self) {
+    pub const fn move_next(&mut self) {
         // SAFETY: the cursor rests on the queue's ghost or on one of its
         // nodes.
-        self.current = unsafe { next_after(self.queue, self.current) };
+        self.current = unsafe { self.queue.next_after(self.current) };
     }
 
     /// Moves to the previous node: from the first node to the ghost, and
@@ -92,7 +88,7 @@ impl<'head, 'nodes, A: Adapter, C: Count> Cursor<'head, 'nodes, A, C> {
     pub fn peek_next_ptr(&self) -> Option<NonNull<A::Node>> {
         // SAFETY: the cursor rests on the queue's ghost or on one of its
         // nodes, and a node stays live while it is on the queue.
-        unsafe { next_after(self.queue, self.current) }
+        unsafe { self.queue.next_after(self.current) }
             .map(|link| unsafe { A::node(link) })
     }
 
@@ -112,62 +108,57 @@ impl<'head, 'nodes, A: Adapter, C: Count> Cursor<'head, 'nodes, A, C> {
 /// A cursor over an exclusively borrowed [`TailQueue`] that can link and
 /// unlink nodes.
 pub struct CursorMut<'head, 'nodes, A: Adapter, C: Count = Uncounted> {
-    queue: &'head TailQueue<'nodes, A, C>,
+    queue: &'head mut TailQueue<'nodes, A, C>,
     current: Option<NonNull<Link>>,
-    exclusive: PhantomData<&'head mut TailQueue<'nodes, A, C>>,
 }
 
 impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
-    /// Returns a cursor at `current`.  The caller's `Pin<&mut>` borrow
-    /// of the queue is what makes the cursor exclusive.
     pub(super) const fn new(
-        queue: &'head TailQueue<'nodes, A, C>,
+        queue: &'head mut TailQueue<'nodes, A, C>,
         current: Option<NonNull<Link>>,
     ) -> Self {
-        Self {
-            queue,
-            current,
-            exclusive: PhantomData,
-        }
+        Self { queue, current }
+    }
+
+    /// Returns a read-only cursor at the same position, borrowed from this
+    /// one.
+    #[must_use]
+    #[inline]
+    pub const fn as_cursor(&self) -> Cursor<'_, 'nodes, A, C> {
+        Cursor::new(self.queue, self.current)
     }
 
     /// Returns the node at the cursor, or `None` at the ghost.
     #[must_use]
     #[inline]
     pub fn current(&self) -> Option<&A::Node> {
-        // SAFETY: a node stays live while it is on the queue.
-        self.current.map(|link| unsafe { A::node(link).as_ref() })
+        self.as_cursor().current()
     }
 
-    /// Returns a pointer to the node at the cursor, or `None` at the ghost.
-    ///
-    /// The pointer is the one the node was pushed with, so it may be
-    /// written through wherever that push allowed it, unlike one made from
-    /// [`current`](Self::current).  It names the node only while the node
-    /// is on the queue, and its link must never be written through it.
+    /// Returns the pointer the node at the cursor was pushed with, or
+    /// `None` at the ghost, as [`TailQueue::front_ptr`] does.
     #[must_use]
     #[inline]
     pub fn current_ptr(&self) -> Option<NonNull<A::Node>> {
-        // SAFETY: a node stays live while it is on the queue.
-        self.current.map(|link| unsafe { A::node(link) })
+        self.as_cursor().current_ptr()
     }
 
     /// Moves to the next node: from the last node to the ghost, and from
     /// the ghost to the front.
     #[inline]
-    pub fn move_next(&mut self) {
-        // SAFETY: the cursor rests on the queue's ghost or on one of its
-        // nodes.
-        self.current = unsafe { next_after(self.queue, self.current) };
+    pub const fn move_next(&mut self) {
+        let mut cursor = self.as_cursor();
+        cursor.move_next();
+        self.current = cursor.current;
     }
 
     /// Moves to the previous node: from the first node to the ghost, and
     /// from the ghost to the back.
     #[inline]
     pub fn move_prev(&mut self) {
-        // SAFETY: the cursor rests on the queue's ghost or on one of its
-        // nodes.
-        self.current = unsafe { self.queue.prev_before(self.current) };
+        let mut cursor = self.as_cursor();
+        cursor.move_prev();
+        self.current = cursor.current;
     }
 
     /// Returns the node after the cursor without moving, or `None` past
@@ -175,8 +166,7 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     #[must_use]
     #[inline]
     pub fn peek_next(&self) -> Option<&A::Node> {
-        // SAFETY: a node stays live while it is on the queue.
-        self.peek_next_ptr().map(|node| unsafe { node.as_ref() })
+        self.as_cursor().peek_next()
     }
 
     /// Returns the node before the cursor without moving, or `None`
@@ -184,8 +174,7 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     #[must_use]
     #[inline]
     pub fn peek_prev(&self) -> Option<&A::Node> {
-        // SAFETY: a node stays live while it is on the queue.
-        self.peek_prev_ptr().map(|node| unsafe { node.as_ref() })
+        self.as_cursor().peek_prev()
     }
 
     /// Returns a pointer to the node after the cursor, as
@@ -194,10 +183,7 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     #[must_use]
     #[inline]
     pub fn peek_next_ptr(&self) -> Option<NonNull<A::Node>> {
-        // SAFETY: the cursor rests on the queue's ghost or on one of its
-        // nodes, and a node stays live while it is on the queue.
-        unsafe { next_after(self.queue, self.current) }
-            .map(|link| unsafe { A::node(link) })
+        self.as_cursor().peek_next_ptr()
     }
 
     /// Returns a pointer to the node before the cursor, as
@@ -206,10 +192,7 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     #[must_use]
     #[inline]
     pub fn peek_prev_ptr(&self) -> Option<NonNull<A::Node>> {
-        // SAFETY: the cursor rests on the queue's ghost or on one of its
-        // nodes, and a node stays live while it is on the queue.
-        unsafe { self.queue.prev_before(self.current) }
-            .map(|link| unsafe { A::node(link) })
+        self.as_cursor().peek_prev_ptr()
     }
 
     /// Links `node` after the cursor; at the ghost, at the front.  The
@@ -218,13 +201,13 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     /// # Panics
     ///
     /// In debug builds, when the node's link is marked as on a queue, or
-    /// when a neighbour of the cursor's link does not point back at it:
-    /// the queue is corrupt.
+    /// when the cursor's link is not consistent with its neighbours: the
+    /// queue is corrupt.
     #[inline]
     pub fn insert_after(&mut self, node: &'nodes mut A::Node) {
         // SAFETY: the `'nodes` borrow keeps the node live, unmoved and
-        // reached only through the queue, and a `&mut` is on no other
-        // queue.
+        // reached only through the queue, a `&mut` allows writes to all
+        // of it, and it is on no other queue.
         unsafe { self.insert_after_ptr(NonNull::from(node)) };
     }
 
@@ -234,8 +217,8 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     /// # Panics
     ///
     /// In debug builds, when the node's link is marked as on a queue, or
-    /// when a neighbour of the cursor's link does not point back at it:
-    /// the queue is corrupt.
+    /// when the cursor's link is not consistent with its neighbours: the
+    /// queue is corrupt.
     ///
     /// # Safety
     ///
@@ -243,15 +226,13 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     /// [`push_front_ptr`](TailQueue::push_front_ptr).
     #[inline]
     pub unsafe fn insert_after_ptr(&mut self, node: NonNull<A::Node>) {
-        let link = unsafe { A::link(node) };
-        let at = match self.current {
-            None => self.queue.ends_link(),
-            Some(at) => {
-                unsafe { super::check(at) };
-                at
-            }
-        };
-        unsafe { self.queue.link_after(at, link) };
+        match self.current {
+            // SAFETY: the caller keeps the push contract.
+            None => unsafe { self.queue.push_front_ptr(node) },
+            // SAFETY: the cursor rests on a node of the queue it borrows
+            // exclusively, and the caller keeps the push contract.
+            Some(at) => unsafe { self.queue.link_after(at, A::link(node)) },
+        }
     }
 
     /// Links `node` before the cursor; at the ghost, at the back.  The
@@ -260,13 +241,13 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     /// # Panics
     ///
     /// In debug builds, when the node's link is marked as on a queue, or
-    /// when a neighbour of the cursor's link does not point back at it:
-    /// the queue is corrupt.
+    /// when the cursor's link is not consistent with its neighbours: the
+    /// queue is corrupt.
     #[inline]
     pub fn insert_before(&mut self, node: &'nodes mut A::Node) {
         // SAFETY: the `'nodes` borrow keeps the node live, unmoved and
-        // reached only through the queue, and a `&mut` is on no other
-        // queue.
+        // reached only through the queue, a `&mut` allows writes to all
+        // of it, and it is on no other queue.
         unsafe { self.insert_before_ptr(NonNull::from(node)) };
     }
 
@@ -276,8 +257,8 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     /// # Panics
     ///
     /// In debug builds, when the node's link is marked as on a queue, or
-    /// when a neighbour of the cursor's link does not point back at it:
-    /// the queue is corrupt.
+    /// when the cursor's link is not consistent with its neighbours: the
+    /// queue is corrupt.
     ///
     /// # Safety
     ///
@@ -285,15 +266,13 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     /// [`push_front_ptr`](TailQueue::push_front_ptr).
     #[inline]
     pub unsafe fn insert_before_ptr(&mut self, node: NonNull<A::Node>) {
-        let link = unsafe { A::link(node) };
-        let at = match self.current {
-            None => self.queue.tail(),
-            Some(at) => unsafe {
-                super::check(at);
-                NonNull::new_unchecked(at.as_ref().prev.get().cast_mut())
-            },
-        };
-        unsafe { self.queue.link_after(at, link) };
+        match self.current {
+            // SAFETY: the caller keeps the push contract.
+            None => unsafe { self.queue.push_back_ptr(node) },
+            // SAFETY: the cursor rests on a node of the queue it borrows
+            // exclusively, and the caller keeps the push contract.
+            Some(at) => unsafe { self.queue.link_before(at, A::link(node)) },
+        }
     }
 
     /// Unlinks the node at the cursor and returns it, moving to the next
@@ -301,8 +280,8 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     ///
     /// # Panics
     ///
-    /// In debug builds, when a neighbour of the cursor's link does not
-    /// point back at it: the queue is corrupt.
+    /// In debug builds, when the cursor's link is not consistent with its
+    /// neighbours: the queue is corrupt.
     #[inline]
     pub fn remove_current(&mut self) -> Option<&'nodes mut A::Node> {
         // SAFETY: the node has left the queue, which held it as
@@ -316,16 +295,17 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     ///
     /// # Panics
     ///
-    /// In debug builds, when a neighbour of the cursor's link does not
-    /// point back at it: the queue is corrupt.
+    /// In debug builds, when the cursor's link is not consistent with its
+    /// neighbours: the queue is corrupt.
     #[inline]
     pub fn remove_current_ptr(&mut self) -> Option<NonNull<A::Node>> {
         let at = self.current?;
         // SAFETY: the cursor rests on a node of the queue it borrows
         // exclusively, and that node is live.
         unsafe {
-            self.current = at.as_ref().next.get();
+            let next = at.as_ref().next.get();
             self.queue.unlink(at);
+            self.current = next;
             Some(A::node(at))
         }
     }
@@ -336,8 +316,8 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     /// # Panics
     ///
     /// In debug builds, when the node's link is marked as on a queue, or
-    /// when a neighbour of the cursor's link does not point back at it:
-    /// the queue is corrupt.
+    /// when the cursor's link is not consistent with its neighbours: the
+    /// queue is corrupt.
     ///
     /// # Errors
     ///
@@ -352,9 +332,11 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
             return Err(node);
         };
         // SAFETY: the `'nodes` borrow keeps the node live, unmoved and
-        // reached only through the queue, a `&mut` is on no other queue,
-        // and the cursor rests on a node of the queue it borrows
-        // exclusively.
+        // reached only through the queue, a `&mut` allows writes to all
+        // of it, and it is on no other queue; the cursor rests on a node
+        // of the queue it borrows exclusively, and that node has left the
+        // queue, which held it as `&'nodes mut` or under the contract of
+        // a `_ptr` push.
         unsafe {
             let link = A::link(NonNull::from(node));
             self.queue.replace(at, link);
@@ -364,14 +346,14 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     }
 
     /// Puts the node at `node` where the node at the cursor is, rests on
-    /// it and returns the node it replaced; at the ghost, links nothing
-    /// and returns `None`.
+    /// it and returns the pointer the node it replaced was pushed with; at
+    /// the ghost, links nothing and returns `None`.
     ///
     /// # Panics
     ///
     /// In debug builds, when the node's link is marked as on a queue, or
-    /// when a neighbour of the cursor's link does not point back at it:
-    /// the queue is corrupt.
+    /// when the cursor's link is not consistent with its neighbours: the
+    /// queue is corrupt.
     ///
     /// # Safety
     ///
@@ -381,32 +363,17 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     pub unsafe fn replace_current_ptr(
         &mut self,
         node: NonNull<A::Node>,
-    ) -> Option<&'nodes mut A::Node> {
+    ) -> Option<NonNull<A::Node>> {
         let at = self.current?;
-        let link = unsafe { A::link(node) };
-        unsafe { self.queue.replace(at, link) };
-        self.current = Some(link);
-        Some(unsafe { A::node(at).as_mut() })
+        // SAFETY: the caller keeps the push contract, and the cursor
+        // rests on a node of the queue it borrows exclusively.
+        unsafe {
+            let link = A::link(node);
+            self.queue.replace(at, link);
+            self.current = Some(link);
+            Some(A::node(at))
+        }
     }
-}
-
-/// Returns the link after `current`; the first at the ghost.
-///
-/// # Safety
-///
-/// `current` must be `None` or the link of a live node on `queue`.
-unsafe fn next_after<A, C>(
-    queue: &TailQueue<'_, A, C>,
-    current: Option<NonNull<Link>>,
-) -> Option<NonNull<Link>>
-where
-    A: Adapter,
-    C: Count,
-{
-    current
-        .map_or(&queue.ends, |link| unsafe { link.as_ref() })
-        .next
-        .get()
 }
 
 /// An iterator over the pointers the nodes of a [`TailQueue`] were
@@ -431,6 +398,7 @@ impl<A: Adapter> IterPtr<'_, A> {
 
     /// Ends the walk if the two ends have met on the last node left,
     /// and returns whether they had.
+    #[inline]
     fn finish(&mut self) -> bool {
         let met = self.front == self.back;
         if met {
@@ -462,11 +430,10 @@ impl<A: Adapter> DoubleEndedIterator for IterPtr<'_, A> {
     fn next_back(&mut self) -> Option<Self::Item> {
         let at = self.back?;
         if !self.finish() {
-            // SAFETY: `at` is not the first node left, so its `prev` is
-            // the previous node's link, and that node is live.
-            self.back = Some(unsafe {
-                NonNull::new_unchecked(at.as_ref().prev.get().cast_mut())
-            });
+            // SAFETY: `at` is not the first node left, so it is not the
+            // queue's first either, and its `prev` is the previous node's
+            // link.
+            self.back = unsafe { at.as_ref().prev.get() };
         }
         // SAFETY: a node stays live while it is on the queue, and the
         // iterator borrows the queue.

@@ -135,7 +135,6 @@ impl<T, const OFFSET: usize> fmt::Debug for Field<T, OFFSET> {
 /// trailing `counted` keeps the length:
 ///
 /// ```
-/// use core::pin::pin;
 /// use tailq::Link;
 ///
 /// struct Frame {
@@ -146,8 +145,8 @@ impl<T, const OFFSET: usize> fmt::Debug for Field<T, OFFSET> {
 /// tailq::queue!(Frames<'nodes> = Frame { link }, counted);
 ///
 /// let mut frame = Frame { number: 7, link: Link::new() };
-/// let mut frames = pin!(Frames::new());
-/// frames.as_mut().push_back(&mut frame);
+/// let mut frames = Frames::new();
+/// frames.push_back(&mut frame);
 /// assert_eq!(frames.len(), 1);
 /// ```
 ///

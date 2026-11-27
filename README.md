@@ -24,7 +24,6 @@ queue never allocates or frees. The crate is `no_std` and needs no
   that a pushed link is on no queue.
 
 ```rust
-use core::pin::pin;
 use tailq::Link;
 
 struct Thread {
@@ -36,9 +35,9 @@ tailq::queue!(RunQueue<'nodes> = Thread { link });
 
 let mut first = Thread { id: 1, link: Link::new() };
 let mut second = Thread { id: 2, link: Link::new() };
-let mut run_queue = pin!(RunQueue::new());
-run_queue.as_mut().push_back(&mut first);
-run_queue.as_mut().push_front(&mut second);
+let mut run_queue = RunQueue::new();
+run_queue.push_back(&mut first);
+run_queue.push_front(&mut second);
 
 let ids: Vec<u32> = run_queue.iter().map(|thread| thread.id).collect();
 assert_eq!(ids, [2, 1]);
@@ -59,9 +58,9 @@ static mut RUN_QUEUE: RunQueue = RunQueue::new();
 One node can sit on several queues at once by embedding one `Link` per
 queue. Generic nodes implement the `Adapter` trait by hand.
 
-The head is pinned because the first node's link points back into it.
-Pin it on the stack with `core::pin::pin!`, or keep it in a `static` or
-other memory that never moves, and pin it with `Pin::new_unchecked`.
+Nothing points into the head: the first node's link holds a marker in
+its place. So a head moves like any other value, full or empty, and it
+is mutated through `&mut self`, with no pinning.
 
 ## Minimum supported Rust version
 
