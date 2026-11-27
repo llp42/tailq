@@ -825,3 +825,43 @@ fn payloads_are_lent_mutably() {
     assert_eq!(met, [100, 103, 101, 2]);
     assert!(queue.iter().all(|entry| entry.link.is_linked()));
 }
+
+#[test]
+fn queues_collect_and_extend() {
+    let mut nodes: Vec<Node> = (0..6).map(node).collect();
+    let (left, right) = nodes.split_at_mut(3);
+    let mut queue: CountedQueue<'_> = left.iter_mut().collect();
+    queue.extend(right.iter_mut().rev());
+    assert_eq!(queue.len(), 6);
+    let collected: Vec<u32> = queue.iter().map(|node| node.key).collect();
+    assert_eq!(collected, [0, 1, 2, 5, 4, 3]);
+}
+
+#[test]
+fn iterators_and_cursors_copy_their_position() {
+    let mut nodes: Vec<Node> = (0..4).map(node).collect();
+    let queue: Queue<'_> = nodes.iter_mut().collect();
+
+    let mut iter = queue.iter();
+    assert_eq!(iter.size_hint(), (1, None));
+    assert_eq!(iter.next().map(|node| node.key), Some(0));
+    let pairs: Vec<(u32, u32)> = iter
+        .clone()
+        .zip(iter.clone().skip(1))
+        .map(|(one, two)| (one.key, two.key))
+        .collect();
+    assert_eq!(pairs, [(1, 2), (2, 3)]);
+    assert_eq!(iter.clone().last().map(|node| node.key), Some(3));
+    assert_eq!(iter.next_back().map(|node| node.key), Some(3));
+    assert_eq!(iter.clone().last().map(|node| node.key), Some(2));
+    assert_eq!(iter.by_ref().count(), 2);
+    assert_eq!(iter.size_hint(), (0, None));
+    assert!(iter.next().is_none() && iter.next_back().is_none());
+    assert_eq!(queue.iter_ptr().last(), queue.back_ptr());
+
+    let mut cursor = queue.cursor_front();
+    let mark = cursor;
+    cursor.move_next();
+    assert_eq!(mark.current().map(|node| node.key), Some(0));
+    assert_eq!(cursor.current().map(|node| node.key), Some(1));
+}

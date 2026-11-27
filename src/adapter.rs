@@ -201,10 +201,7 @@ pub unsafe trait Payload: Adapter {
 ///     link: Link::new(),
 ///     info: Info { id, runtime: 0 },
 /// });
-/// let mut run_queue = TailQueue::<RunLink>::new();
-/// for thread in &mut threads {
-///     run_queue.push_back(thread);
-/// }
+/// let mut run_queue: TailQueue<'_, RunLink> = threads.iter_mut().collect();
 /// for info in run_queue.iter_mut() {
 ///     info.runtime += u64::from(info.id);
 /// }

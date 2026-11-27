@@ -874,6 +874,44 @@ impl<A: Adapter, C: Count> Default for TailQueue<'_, A, C> {
     }
 }
 
+impl<'nodes, A: Adapter, C: Count> Extend<&'nodes mut A::Node>
+    for TailQueue<'nodes, A, C>
+{
+    /// Pushes each node at the back, in order.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when a node's link is marked as on a queue.
+    #[inline]
+    fn extend<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = &'nodes mut A::Node>,
+    {
+        for node in iter {
+            self.push_back(node);
+        }
+    }
+}
+
+impl<'nodes, A: Adapter, C: Count> FromIterator<&'nodes mut A::Node>
+    for TailQueue<'nodes, A, C>
+{
+    /// Returns a queue of the nodes, in order.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when a node's link is marked as on a queue.
+    #[inline]
+    fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = &'nodes mut A::Node>,
+    {
+        let mut queue = Self::new();
+        queue.extend(iter);
+        queue
+    }
+}
+
 impl<A: Adapter, C: Count> Drop for TailQueue<'_, A, C> {
     /// Marks the links of the nodes still on the queue as on no queue.
     #[inline]

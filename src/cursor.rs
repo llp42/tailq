@@ -10,6 +10,7 @@
 
 use super::{Adapter, Count, Link, Payload, TailQueue, Uncounted};
 use core::fmt;
+use core::iter::FusedIterator;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 
@@ -104,6 +105,16 @@ impl<'head, 'nodes, A: Adapter, C: Count> Cursor<'head, 'nodes, A, C> {
             .map(|link| unsafe { A::node(link) })
     }
 }
+
+// By hand: a derive would require the adapter and the count to be Clone.
+impl<A: Adapter, C: Count> Clone for Cursor<'_, '_, A, C> {
+    #[inline]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<A: Adapter, C: Count> Copy for Cursor<'_, '_, A, C> {}
 
 /// A cursor over an exclusively borrowed [`TailQueue`] that can link and
 /// unlink nodes.
@@ -282,6 +293,7 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     ///
     /// In debug builds, when the cursor's link is not consistent with its
     /// neighbours: the queue is corrupt.
+    #[must_use]
     #[inline]
     pub fn remove_current(&mut self) -> Option<&'nodes mut A::Node> {
         // SAFETY: the node has left the queue, which held it as
@@ -297,6 +309,7 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     ///
     /// In debug builds, when the cursor's link is not consistent with its
     /// neighbours: the queue is corrupt.
+    #[must_use]
     #[inline]
     pub fn remove_current_ptr(&mut self) -> Option<NonNull<A::Node>> {
         let at = self.current?;
@@ -359,6 +372,7 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     ///
     /// `node` must meet the contract of
     /// [`push_front_ptr`](TailQueue::push_front_ptr).
+    #[must_use]
     #[inline]
     pub unsafe fn replace_current_ptr(
         &mut self,
@@ -437,6 +451,18 @@ impl<A: Adapter> Iterator for IterPtr<'_, A> {
         // iterator borrows the queue.
         Some(unsafe { A::node(at) })
     }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (usize::from(self.front.is_some()), None)
+    }
+
+    #[inline]
+    fn last(self) -> Option<Self::Item> {
+        // SAFETY: a node stays live while it is on the queue, and the
+        // iterator borrows the queue.
+        self.back.map(|at| unsafe { A::node(at) })
+    }
 }
 
 impl<A: Adapter> DoubleEndedIterator for IterPtr<'_, A> {
@@ -452,6 +478,15 @@ impl<A: Adapter> DoubleEndedIterator for IterPtr<'_, A> {
         // SAFETY: a node stays live while it is on the queue, and the
         // iterator borrows the queue.
         Some(unsafe { A::node(at) })
+    }
+}
+
+impl<A: Adapter> FusedIterator for IterPtr<'_, A> {}
+
+impl<A: Adapter> Clone for IterPtr<'_, A> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self::new(self.front, self.back)
     }
 }
 
@@ -476,6 +511,18 @@ impl<'head, A: Adapter> Iterator for Iter<'head, A> {
         // iterator borrows the queue.
         self.nodes.next().map(|node| unsafe { node.as_ref() })
     }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.nodes.size_hint()
+    }
+
+    #[inline]
+    fn last(self) -> Option<Self::Item> {
+        // SAFETY: a node stays live while it is on the queue, and the
+        // iterator borrows the queue.
+        self.nodes.last().map(|node| unsafe { node.as_ref() })
+    }
 }
 
 impl<A: Adapter> DoubleEndedIterator for Iter<'_, A> {
@@ -484,6 +531,15 @@ impl<A: Adapter> DoubleEndedIterator for Iter<'_, A> {
         // SAFETY: a node stays live while it is on the queue, and the
         // iterator borrows the queue.
         self.nodes.next_back().map(|node| unsafe { node.as_ref() })
+    }
+}
+
+impl<A: Adapter> FusedIterator for Iter<'_, A> {}
+
+impl<A: Adapter> Clone for Iter<'_, A> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self::new(self.nodes.clone())
     }
 }
 
@@ -515,6 +571,19 @@ impl<'head, A: Payload> Iterator for IterMut<'head, A> {
             .next()
             .map(|node| unsafe { A::payload(node).as_mut() })
     }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.nodes.size_hint()
+    }
+
+    #[inline]
+    fn last(self) -> Option<Self::Item> {
+        // SAFETY: as for `next`.
+        self.nodes
+            .last()
+            .map(|node| unsafe { A::payload(node).as_mut() })
+    }
 }
 
 impl<A: Payload> DoubleEndedIterator for IterMut<'_, A> {
@@ -526,6 +595,8 @@ impl<A: Payload> DoubleEndedIterator for IterMut<'_, A> {
             .map(|node| unsafe { A::payload(node).as_mut() })
     }
 }
+
+impl<A: Payload> FusedIterator for IterMut<'_, A> {}
 
 impl<A: Adapter, C: Count> fmt::Debug for Cursor<'_, '_, A, C> {
     #[inline]
