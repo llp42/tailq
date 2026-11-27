@@ -355,9 +355,21 @@ dependencies = [
 
 [[package]]
 name = "tailq"
-version = "0.1.1"
+version = "0.2.0"
+
+[[package]]
+name = "tailq-bench"
+version = "0.0.0"
 dependencies = [
  "criterion",
+ "tailq",
+]
+
+[[package]]
+name = "tailq-flip"
+version = "0.0.0"
+dependencies = [
+ "tailq",
 ]
 
 [[package]]

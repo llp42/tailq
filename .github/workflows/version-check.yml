@@ -13,6 +13,7 @@ permissions:
 jobs:
   version-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       # main as it is now, not as it was when the PR was opened.
       - uses: actions/checkout@v7
@@ -29,8 +30,8 @@ jobs:
       - env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          base=$(cargo metadata --no-deps --format-version 1 --manifest-path base/Cargo.toml | jq -r '.packages[0].version')
-          head=$(cargo metadata --no-deps --format-version 1 --manifest-path head/Cargo.toml | jq -r '.packages[0].version')
+          base=$(cargo metadata --no-deps --format-version 1 --manifest-path base/Cargo.toml | jq -r '.packages[] | select(.name == "tailq") | .version')
+          head=$(cargo metadata --no-deps --format-version 1 --manifest-path head/Cargo.toml | jq -r '.packages[] | select(.name == "tailq") | .version')
           # Semver order, so that 0.2.0-rc.1 is below 0.2.0 and 0.10.0 above 0.9.0. The highest of the two is printed last.
           highest=$(npx --yes semver@7.8.6 "$base" "$head" | tail -n 1)
           if [[ "$head" == "$base" || "$highest" != "$head" ]]; then

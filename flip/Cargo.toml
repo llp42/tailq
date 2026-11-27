@@ -1,0 +1,22 @@
+[package]
+name = "tailq-flip"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+authors = ["Leonardo Lopes Pereira <leonardolopespereira@outlook.com>"]
+license = "MIT"
+description = "A type macro whose answer changes from one expansion to the next, for tailq's tests"
+repository = "https://github.com/llp42/tailq"
+readme = "../README.md"
+keywords = ["test"]
+categories = ["development-tools::testing"]
+publish = false
+
+[lib]
+proc-macro = true
+
+[dev-dependencies]
+tailq = { path = ".." }
+
+[lints]
+workspace = true

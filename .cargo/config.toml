@@ -1,0 +1,4 @@
+# Every test, doctest and bench binary runs through limit.sh: at most 512 MiB of data memory and a timeout. Cargo
+# builds it first, without the limit. tests/limits.rs fails when a test runs without it.
+[target.'cfg(all())']
+runner = [".github/limit.sh"]

@@ -11,6 +11,7 @@ permissions:
 jobs:
   source-branch:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       # Required check: main only takes PRs from rc/* branches of this repo, never forks. The job runs on every PR and
       # decides here, not in an if: of its own: a skipped job passes, so a PR opened into another branch and then
@@ -31,6 +32,7 @@ jobs:
 
   pr-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       # Required check: the PR title is the body of the merge commit, so it follows the commit style. The PR body
       # stays out of the commit, but it must not be empty.

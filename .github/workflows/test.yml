@@ -7,9 +7,18 @@ on:
 permissions:
   contents: read
 
+# A new push supersedes the runs of the one before.
+concurrency:
+  group: test-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Every test binary runs through .github/limit.sh, the runner .cargo/config.toml names: at most 512 MiB of data
+# memory and a timeout, after cargo builds it without the limit. Miri runs its own runner, so it runs under limit.sh
+# as a whole, building the tests there too: only its sysroot and the library are built first, without the limit.
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
@@ -18,13 +27,52 @@ jobs:
       - run: cargo test --locked
       # Release builds leave out the debug checks but keep the unlinked mark, which the tests read.
       - run: cargo test --locked --release
-      # The crate as cargo publish uploads it, built on its own, so that a release cannot fail at the upload.
-      - run: cargo package --locked
+      # The tests that need the flip type macro, which tailq cannot depend on and still ship its tests.
+      - run: cargo test --locked -p tailq-flip
+      # Each benchmark once, in criterion's test mode, which it takes without --bench, so that the benches keep
+      # building and running; optimised, as they run for real, rather than with the debug checks, whose membership
+      # walk the random removals would repeat. The runner puts the program under limit.sh too.
+      - run: cargo run --locked --release -p tailq-bench
+      # The crate as cargo publish uploads it, built on its own, so that a release cannot fail at the upload, and its
+      # tests run from the package, which review 6 found could ship a test of a dependency it drops.
+      - run: |
+          cargo package --locked -p tailq
+          crate=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "tailq") | .version')
+          cargo test --locked --manifest-path "target/package/tailq-$crate/Cargo.toml"
       # no_std: a bare-metal target has no std to link.
       - run: cargo build --locked --target x86_64-unknown-none
 
   miri:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Every pointer access of the tests and doctests, with strict provenance, under both aliasing models.
+          # Symbolic alignment fails an access that is aligned only by where the allocator put it.
+          - name: stacked borrows
+            flags: -Zmiri-strict-provenance -Zmiri-symbolic-alignment-check
+          - name: tree borrows
+            flags: -Zmiri-strict-provenance -Zmiri-tree-borrows
+          # Without the debug checks, and without the fill of a leaving link's next.
+          - name: release
+            flags: -Zmiri-strict-provenance
+            args: --release
+          # 32-bit pointers, and big-endian ones.
+          - name: i686
+            flags: -Zmiri-strict-provenance
+            args: --target i686-unknown-linux-gnu
+          - name: s390x
+            flags: -Zmiri-strict-provenance -Zmiri-tree-borrows
+            args: --target s390x-unknown-linux-gnu
+          # The thread tests under sixteen schedules rather than one, one process each: -Zmiri-many-seeds runs
+          # them all at once, which would not fit in the memory limit.
+          - name: threads
+            flags: -Zmiri-strict-provenance
+            args: --test raw
+            seeds: 16
+    name: miri (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v7
       # Miri needs nightly. The nightly is pinned like the stable toolchain, so that a new one cannot fail a PR that
@@ -33,26 +81,64 @@ jobs:
         with:
           toolchain: nightly-2026-10-04
           components: miri,rust-src
-      # Every pointer access of the tests and doctests, under both aliasing models, with strict provenance.
-      - run: cargo miri test --locked
+      # Builds Miri's sysroot, which outgrows the limit, and the library; --no-run only records how to build each
+      # test crate, which Miri builds in the next step, under limit.sh.
+      - run: cargo miri test --locked --no-run ${{ matrix.args }}
         env:
-          MIRIFLAGS: -Zmiri-strict-provenance
-      - run: cargo miri test --locked
+          MIRIFLAGS: ${{ matrix.flags }}
+      - run: |
+          for seed in $(seq 0 $((${SEEDS:-1} - 1))); do
+            MIRIFLAGS="$FLAGS${SEEDS:+ -Zmiri-seed=$seed}" .github/limit.sh cargo miri test --locked $ARGS
+          done
         env:
-          MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-tree-borrows
+          FLAGS: ${{ matrix.flags }}
+          ARGS: ${{ matrix.args }}
+          SEEDS: ${{ matrix.seeds }}
+
+  compile-fail:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      # Stable rustdoc only checks that a compile_fail doctest fails; nightly also checks its error code.
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: nightly-2026-10-04
+      - run: cargo test --locked --doc -p tailq -p tailq-flip
+
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: llvm-tools
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      # Every code region of src/ must run in the tests, in debug builds, where the debug checks are compiled in.
+      - run: |
+          source <(cargo llvm-cov show-env --sh)
+          cargo llvm-cov clean --workspace
+          cargo test --locked
+          cargo llvm-cov report --json | python3 .github/coverage.py
 
   msrv:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      # The rust-version of Cargo.toml, read with the runner's own cargo, so that this job cannot drift from it.
+      # The rust-version of Cargo.toml, read with the runner's own cargo, so that this job cannot drift from it. The
+      # .0 release exactly: rustup resolves a bare 1.99 to the newest 1.99 patch.
       - id: msrv
         run: |
-          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].rust_version // empty')
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "tailq") | .rust_version // empty')
           if [[ -z "$version" ]]; then
             echo "::error::Cargo.toml sets no rust-version"
             exit 1
           fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+$ ]] && version="$version.0"
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/setup-rust
         with:

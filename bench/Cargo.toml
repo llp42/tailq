@@ -1,0 +1,20 @@
+[package]
+name = "tailq-bench"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+authors = ["Leonardo Lopes Pereira <leonardolopespereira@outlook.com>"]
+license = "MIT"
+description = "Benchmarks of the tailq crate"
+repository = "https://github.com/llp42/tailq"
+readme = "../README.md"
+keywords = ["intrusive", "linked-list", "queue", "benchmark"]
+categories = ["data-structures"]
+publish = false
+
+[dependencies]
+tailq = { path = ".." }
+criterion = { version = "=0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[lints]
+workspace = true
