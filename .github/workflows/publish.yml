@@ -16,6 +16,7 @@ jobs:
       startsWith(github.event.pull_request.head.ref, 'rc/') &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -37,13 +38,15 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
       # Here, with no publish credentials: the tests, and the crate as cargo publish uploads it, built on its own.
-      - run: cargo test --locked
+      - run: cargo test --locked --no-run
+      - run: .github/limit.sh cargo test --locked
       - run: cargo package --locked -p tailq
 
   publish:
     # Only once verify passed, so under its guards as well.
     needs: verify
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Its protection rules gate the job, and crates.io can require it of the workflow that publishes.
     environment: release
     # One publish at a time. A later one waits for the one before to tag, in order, and none is cancelled.

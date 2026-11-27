@@ -28,9 +28,10 @@ jobs:
       # Release builds leave out the debug checks but keep the unlinked mark, which the tests read.
       - run: cargo test --locked --release --no-run
       - run: .github/limit.sh cargo test --locked --release
-      # Each benchmark once, in criterion's test mode, so that the benches keep building and running.
-      - run: cargo test --locked -p tailq-bench --benches --no-run
-      - run: .github/limit.sh cargo test --locked -p tailq-bench --benches
+      # Each benchmark once, in criterion's test mode, so that the benches keep building and running; optimised, as
+      # they run for real, rather than with the debug checks, whose membership walk the random removals would repeat.
+      - run: cargo test --locked -p tailq-bench --benches --release --no-run
+      - run: .github/limit.sh cargo test --locked -p tailq-bench --benches --release
       # The crate as cargo publish uploads it, built on its own, so that a release cannot fail at the upload.
       - run: cargo package --locked -p tailq
       # no_std: a bare-metal target has no std to link.
@@ -114,7 +115,7 @@ jobs:
           tool: cargo-llvm-cov@0.9.1
       # Every code region of src/ must run in the tests, in debug builds, where the debug checks are compiled in.
       - run: |
-          source <(cargo llvm-cov show-env --export-prefix)
+          source <(cargo llvm-cov show-env --sh)
           cargo llvm-cov clean --workspace
           cargo test --locked --no-run
           .github/limit.sh cargo test --locked

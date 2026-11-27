@@ -9,9 +9,13 @@ takes would show as missed although the code ran.
 """
 
 import json
+import pathlib
 import sys
 
 CODE_REGION = 0
+# The crate's own src/, wherever the checkout is: a path that merely contains "/src/", such as
+# ~/src/tailq/tests/model.rs, is not in it.
+SRC = pathlib.Path(__file__).resolve().parent.parent / "src"
 
 
 def main() -> int:
@@ -20,7 +24,7 @@ def main() -> int:
     for function in export["functions"]:
         for start, start_col, end, end_col, count, file_id, _, kind in function["regions"]:
             name = function["filenames"][file_id]
-            if kind != CODE_REGION or "/src/" not in name:
+            if kind != CODE_REGION or not pathlib.Path(name).resolve().is_relative_to(SRC):
                 continue
             key = (name, start, start_col, end, end_col)
             runs[key] = max(runs.get(key, 0), count)

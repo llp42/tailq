@@ -95,10 +95,12 @@ cargo doc --no-deps --locked
 cargo build --locked --target x86_64-unknown-none
 cargo test --locked --no-run && .github/limit.sh cargo test --locked
 cargo test --locked --release --no-run && .github/limit.sh cargo test --locked --release
-cargo test --locked -p tailq-bench --benches --no-run && .github/limit.sh cargo test --locked -p tailq-bench --benches
+bench="cargo test --locked -p tailq-bench --benches --release"
+$bench --no-run && .github/limit.sh $bench
 nightly=+nightly-2026-10-04
 miri=".github/limit.sh cargo $nightly miri test --locked"
 strict=-Zmiri-strict-provenance
+cargo $nightly miri setup  # Miri's sysroot, built without the limit, which it outgrows
 .github/limit.sh cargo $nightly test --locked --doc
 MIRIFLAGS="$strict -Zmiri-symbolic-alignment-check" $miri
 MIRIFLAGS="$strict -Zmiri-tree-borrows" $miri

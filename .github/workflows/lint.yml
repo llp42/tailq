@@ -35,6 +35,8 @@ jobs:
           components: clippy
       # The lint levels, pedantic and nursery included, are in Cargo.toml, for every crate of the workspace.
       - run: cargo clippy --workspace --all-targets --locked
+      # Release builds compile the debug checks out, which some lints see.
+      - run: cargo clippy --workspace --all-targets --locked --release
 
   fmt:
     runs-on: ubuntu-latest

@@ -13,6 +13,7 @@ permissions:
 jobs:
   version-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       # main as it is now, not as it was when the PR was opened.
       - uses: actions/checkout@v7
