@@ -9,10 +9,6 @@
 //! macro names everything through `$crate` now.
 
 #![forbid(unsafe_code)]
-#![expect(
-    clippy::tests_outside_test_module,
-    reason = "an integration test crate is itself the test module"
-)]
 
 // The macro must not resolve anything through this crate: if its
 // expansion named `::core` again, this crate would be used and the
