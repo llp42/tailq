@@ -904,6 +904,27 @@ fn a_fold_does_not_step_to_the_forward_word_of_a_link_that_left() {
     queue.iter_ptr().for_each(drop);
 }
 
+/// A counted fold checks its count as a walk by `next` does, so it ends
+/// with nothing left to count.  Here the fold runs from the front over a
+/// queue that counts three over two nodes, after a stale copy of its head
+/// took the middle one off.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_counted_fold_from_the_front_ends_with_nothing_left_to_count() {
+    let nodes = Nodes::new(3);
+    let queue = counted_with_one_taken_by_a_copy(&nodes);
+    queue.iter_ptr().for_each(drop);
+}
+
+/// As above, from the back.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_counted_fold_from_the_back_ends_with_nothing_left_to_count() {
+    let nodes = Nodes::new(3);
+    let queue = counted_with_one_taken_by_a_copy(&nodes);
+    queue.iter_ptr().rev().for_each(drop);
+}
+
 /// Clearing a queue checks every link before it writes any, so a corrupt
 /// queue does not walk into another.  Here the first node of `queue` holds
 /// the bytes of the first of `other`.

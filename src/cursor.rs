@@ -633,6 +633,10 @@ impl<A: Adapter, C: Count> Iterator for IterPtr<'_, A, C> {
         let (Some(mut at), Some(back)) = (self.front, self.back) else {
             return init;
         };
+        // What `next` counts, kept in debug builds only, where it checks
+        // the count as `next` does.
+        #[cfg(debug_assertions)]
+        let mut left = self.left;
         let mut acc = init;
         loop {
             Self::check_left(at);
@@ -640,6 +644,15 @@ impl<A: Adapter, C: Count> Iterator for IterPtr<'_, A, C> {
             // that `f` may remove it.
             let next = unsafe { at.as_ref() }.next.get();
             let last = at.as_ptr() == back.as_ptr();
+            #[cfg(debug_assertions)]
+            {
+                left.sub_one();
+                // As in `next`.
+                assert!(
+                    left.exact().is_none_or(|left| (left == 0) == last),
+                    "tail queue: the queue is corrupt",
+                );
+            }
             // SAFETY: a node stays live while it is on the queue, and the
             // iterator borrows the queue.
             acc = f(acc, unsafe { node_of::<A>(at) });
@@ -701,6 +714,9 @@ impl<A: Adapter, C: Count> DoubleEndedIterator for IterPtr<'_, A, C> {
         let (Some(front), Some(mut at)) = (self.front, self.back) else {
             return init;
         };
+        // As in `fold`.
+        #[cfg(debug_assertions)]
+        let mut left = self.left;
         let mut acc = init;
         loop {
             Self::check_left(at);
@@ -708,6 +724,15 @@ impl<A: Adapter, C: Count> DoubleEndedIterator for IterPtr<'_, A, C> {
             // has a `prev`, and `check_left` makes sure this one is on it.
             let prev = unsafe { at.as_ref().prev.get().unwrap_unchecked() };
             let first = at.as_ptr() == front.as_ptr();
+            #[cfg(debug_assertions)]
+            {
+                left.sub_one();
+                // As in `next_back`.
+                assert!(
+                    left.exact().is_none_or(|left| (left == 0) == first),
+                    "tail queue: the queue is corrupt",
+                );
+            }
             // SAFETY: as in `fold`.
             acc = f(acc, unsafe { node_of::<A>(at) });
             if first {
