@@ -15,6 +15,7 @@ pub trait Count: Sealed + fmt::Debug {}
 /// The [`Count`] of a queue that keeps its length in its head, one word,
 /// for an O(1) [`len`](crate::TailQueue::len).
 #[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
 pub struct Counted(usize);
 
 impl Counted {

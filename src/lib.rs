@@ -121,6 +121,42 @@ pub(crate) fn is(slot: Option<NonNull<Link>>, at: NonNull<Link>) -> bool {
     }
 }
 
+/// Returns the `next` word of the link at `at`, read through a raw
+/// pointer: unlike `Cell::get` it costs no call in unoptimised builds,
+/// where the debug checks walk links through it.
+///
+/// # Safety
+///
+/// `at` must be the link of a live node.
+#[cfg(debug_assertions)]
+#[expect(
+    clippy::inline_always,
+    reason = "the debug checks walk links through it, where a call would \
+              cost more than the load"
+)]
+#[inline(always)]
+const unsafe fn next_of(at: NonNull<Link>) -> Option<NonNull<Link>> {
+    // SAFETY: the link is live, and a `Cell` has the layout of its value.
+    unsafe { *(&raw const (*at.as_ptr()).next).cast::<Option<NonNull<Link>>>() }
+}
+
+/// Returns the `prev` word of the link at `at`, as [`next_of`] does.
+///
+/// # Safety
+///
+/// `at` must be the link of a live node.
+#[cfg(debug_assertions)]
+#[expect(
+    clippy::inline_always,
+    reason = "the debug checks walk links through it, where a call would \
+              cost more than the load"
+)]
+#[inline(always)]
+const unsafe fn prev_of(at: NonNull<Link>) -> Option<NonNull<Link>> {
+    // SAFETY: the link is live, and a `Cell` has the layout of its value.
+    unsafe { *(&raw const (*at.as_ptr()).prev).cast::<Option<NonNull<Link>>>() }
+}
+
 /// The field a node embeds to join one [`TailQueue`].
 ///
 /// Two words: the next node's link, and the previous node's, `None`
@@ -327,9 +363,9 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// # Safety
     ///
-    /// `node` must be on this queue, and valid for reads of its link.  The
-    /// cursor then reaches the node through the pointer it was pushed
-    /// with, not through `node`.
+    /// `node` must be on this queue, aligned, and valid for reads of its
+    /// link.  The cursor then reaches the node through the pointer it was
+    /// pushed with, not through `node`.
     #[must_use]
     #[inline]
     pub unsafe fn cursor_from_ptr(
@@ -369,9 +405,9 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// # Safety
     ///
-    /// `node` must be on this queue, and valid for reads of its link.  The
-    /// cursor then reaches the node through the pointer it was pushed
-    /// with, not through `node`.
+    /// `node` must be on this queue, aligned, and valid for reads of its
+    /// link.  The cursor then reaches the node through the pointer it was
+    /// pushed with, not through `node`.
     #[must_use]
     #[inline]
     pub unsafe fn cursor_mut_from_ptr(
@@ -417,8 +453,8 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// # Safety
     ///
-    /// `node` must point at a live node whose link is on no queue, and it
-    /// must be valid for reads and writes of the whole node.  Until the
+    /// `node` must point at a live, aligned node whose link is on no
+    /// queue, and it must be valid for reads and writes of the whole node.  Until the
     /// node leaves the queue:
     ///
     /// - it must stay live and unmoved;
@@ -489,6 +525,11 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     }
 
     /// Unlinks the first node and returns it, or `None` when empty.
+    ///
+    /// A node pushed by pointer leaves as a `&'nodes mut`, which must then
+    /// be the only way to the node for as long as it is used;
+    /// [`pop_front_ptr`](Self::pop_front_ptr) hands back the pointer
+    /// instead.
     ///
     /// # Panics
     ///
@@ -589,9 +630,9 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// # Safety
     ///
-    /// `node` must be on this queue, and valid for reads and writes of its
-    /// link, as the pointer it was pushed with, or one the queue returned,
-    /// is.
+    /// `node` must be on this queue, aligned, and valid for reads and
+    /// writes of its link, as the pointer it was pushed with, or one the
+    /// queue returned, is.
     #[inline]
     pub unsafe fn remove_ptr(&mut self, node: NonNull<A::Node>) {
         // SAFETY: the caller puts the node on this queue.
@@ -712,26 +753,41 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// `at` must be the link of a live node, on a queue of live nodes when
     /// it is on one.
+    #[cfg_attr(
+        not(debug_assertions),
+        expect(
+            clippy::unused_self,
+            clippy::missing_const_for_fn,
+            reason = "the check compiles out of release builds"
+        )
+    )]
     #[inline]
     unsafe fn check_member(&self, at: NonNull<Link>) {
         #[cfg(debug_assertions)]
         {
-            // SAFETY: the node is live.
-            let linked = unsafe { at.as_ref() }.is_linked();
-            assert!(linked, "tail queue: the link is on no queue");
             let (mut back, mut ahead) = (at, at);
             loop {
-                // SAFETY: the links walked are on one queue of live nodes.
-                let Some(prev) = (unsafe { back.as_ref().prev_link() }) else {
-                    assert!(
-                        is(self.first, back),
-                        "tail queue: the link is not on this queue",
-                    );
-                    break;
-                };
-                back = prev;
+                // SAFETY: the links walked are those of live nodes.
+                match unsafe { prev_of(back) } {
+                    Some(before) if before.as_ptr() != NOWHERE.as_ptr() => {
+                        back = before;
+                    }
+                    // The first link, or one on no queue: `at`, or a link a
+                    // corrupt queue leads to.
+                    prev => {
+                        assert!(
+                            prev.is_some(),
+                            "tail queue: the link is on no queue",
+                        );
+                        assert!(
+                            is(self.first, back),
+                            "tail queue: the link is not on this queue",
+                        );
+                        break;
+                    }
+                }
                 // SAFETY: as above.
-                let Some(next) = unsafe { ahead.as_ref() }.next.get() else {
+                let Some(next) = (unsafe { next_of(ahead) }) else {
                     assert!(
                         is(self.last, ahead),
                         "tail queue: the link is not on this queue",
@@ -756,17 +812,26 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// # Safety
     ///
     /// `at` must be the link of a live node.
+    #[cfg_attr(
+        not(debug_assertions),
+        expect(
+            clippy::unused_self,
+            clippy::missing_const_for_fn,
+            reason = "the check compiles out of release builds"
+        )
+    )]
     #[inline]
     unsafe fn check(&self, at: NonNull<Link>) {
         #[cfg(debug_assertions)]
         {
             // SAFETY: the node is live.
-            let link = unsafe { at.as_ref() };
-            assert!(link.is_linked(), "tail queue: the link is on no queue");
-            match link.next.get() {
+            let prev = unsafe { prev_of(at) };
+            assert!(prev.is_some(), "tail queue: the link is on no queue");
+            // SAFETY: as above.
+            match unsafe { next_of(at) } {
                 // SAFETY: a link on a queue has a live next node.
                 Some(next) => assert!(
-                    is(unsafe { next.as_ref() }.prev.get(), at),
+                    is(unsafe { prev_of(next) }, at),
                     "tail queue: the next link does not point back",
                 ),
                 None => assert!(
@@ -774,14 +839,13 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
                     "tail queue: the link is not on this queue",
                 ),
             }
-            // SAFETY: the link is on a queue.
-            match unsafe { link.prev_link() } {
+            match prev {
                 // SAFETY: a link on a queue has a live previous node.
-                Some(prev) => assert!(
-                    is(unsafe { prev.as_ref() }.next.get(), at),
+                Some(before) if before.as_ptr() != NOWHERE.as_ptr() => assert!(
+                    is(unsafe { next_of(before) }, at),
                     "tail queue: the previous link does not point at this one",
                 ),
-                None => assert!(
+                _ => assert!(
                     is(self.first, at),
                     "tail queue: the link is not on this queue",
                 ),

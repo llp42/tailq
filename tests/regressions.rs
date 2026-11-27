@@ -11,11 +11,11 @@
     reason = "an integration test crate is itself the test module"
 )]
 
+use core::mem::size_of;
 use core::mem::{replace, take};
-#[cfg(debug_assertions)]
 use core::ptr;
 use core::ptr::NonNull;
-use tailq::__private::{aligned, check_payload};
+use tailq::__private::{aligned, check_payload, link_offset, payload_offset};
 use tailq::{Counted, Link, TailQueue};
 
 /// A node whose key is its payload.
@@ -350,6 +350,8 @@ fn the_compile_time_checks_answer_at_run_time() {
     assert!(aligned::<Node, Link>(0));
     assert!(!aligned::<Node, Link>(1));
     assert!(!aligned::<u8, Link>(0));
+    assert_eq!(link_offset::<Node>(0), 0);
+    assert_eq!(payload_offset::<Node, u32>(16), 16);
     check_payload::<NodeLink>();
     let extra: u8 = 7;
     let wrapped = Wrapped {
@@ -363,4 +365,365 @@ fn the_compile_time_checks_answer_at_run_time() {
 #[should_panic(expected = "tailq: the payload overlaps the link")]
 fn an_overlapping_payload_fails_its_check() {
     check_payload::<OverLink<u8>>();
+}
+
+#[test]
+#[should_panic(
+    expected = "tailq::adapter!: the link is not aligned in every node"
+)]
+fn an_unaligned_link_fails_its_check() {
+    assert_eq!(link_offset::<u8>(0), 0);
+}
+
+#[test]
+#[should_panic(
+    expected = "tailq::adapter!: the payload is not aligned in every node"
+)]
+fn an_unaligned_payload_fails_its_check() {
+    assert_eq!(payload_offset::<Node, u32>(1), 1);
+}
+
+/// Fills a queue reached by pointer, as a head in a `static mut` is, with
+/// the nodes at `base`, and returns the pointer to the queue.
+///
+/// # Safety
+///
+/// `base` must point at `N` nodes that outlive the queue, on no queue.
+unsafe fn by_pointer<const N: usize>(
+    head: &mut Queue<'_>,
+    base: *mut Node,
+) -> *mut Queue<'static> {
+    let queue = ptr::from_mut(head).cast::<Queue<'static>>();
+    for i in 0..N {
+        // SAFETY: as the caller promises.
+        unsafe { (*queue).push_back_ptr(NonNull::new_unchecked(base.add(i))) };
+    }
+    queue
+}
+
+/// The third review found that a walk over a head reached by pointer, a
+/// `static mut` one, ran into the poisoned link of the node it had just
+/// handed out when the walk was a `for_each`.  Removing what the walk just
+/// handed out works from either end, through `next` and through `fold`.
+#[test]
+fn a_walk_by_pointer_may_remove_what_it_hands_out() {
+    let ways: [u8; 4] = [0, 1, 2, 3];
+    for way in ways {
+        let mut nodes = nodes::<4>();
+        let mut head = Queue::new();
+        let mut seen = Vec::new();
+        // SAFETY: the nodes outlive the queue and are on no queue; each is
+        // removed once, right after the walk hands it out, and no reference
+        // to the queue is alive meanwhile.
+        unsafe {
+            let queue = by_pointer::<4>(&mut head, nodes.as_mut_ptr());
+            let mut take = |node: NonNull<Node>| {
+                seen.push((*node.as_ptr()).key);
+                (*queue).remove_ptr(node);
+            };
+            match way {
+                0 => (*queue).iter_ptr().for_each(&mut take),
+                1 => (*queue).iter_ptr().rev().for_each(&mut take),
+                2 => {
+                    for node in (*queue).iter_ptr() {
+                        take(node);
+                    }
+                }
+                _ => {
+                    for node in (*queue).iter_ptr().rev() {
+                        take(node);
+                    }
+                }
+            }
+            assert!((*queue).is_empty());
+        }
+        let expected: [u32; 4] = if way.is_multiple_of(2) {
+            [1, 2, 3, 4]
+        } else {
+            [4, 3, 2, 1]
+        };
+        assert_eq!(seen, expected);
+    }
+}
+
+/// The same review found that a walk whose other end left the queue meanwhile
+/// stepped past the queue's new end, into `unwrap_unchecked` on `None`: it
+/// ends there now, from either end, through `next` and through `fold`.
+#[test]
+fn a_walk_by_pointer_ends_when_its_other_end_leaves() {
+    let ways: [u8; 4] = [0, 1, 2, 3];
+    for way in ways {
+        let mut nodes = nodes::<4>();
+        let (first, last) =
+            (NonNull::from(&nodes[0]), NonNull::from(&nodes[3]));
+        let mut head = Queue::new();
+        let mut seen = Vec::new();
+        // SAFETY: the nodes outlive the queue and are on no queue; the walk
+        // removes the node at its other end, which it then never reaches,
+        // and no reference to the queue is alive meanwhile.
+        unsafe {
+            let queue = by_pointer::<4>(&mut head, nodes.as_mut_ptr());
+            let other = if way.is_multiple_of(2) { last } else { first };
+            let mut visit = |node: NonNull<Node>| {
+                if seen.is_empty() {
+                    (*queue).remove_ptr(other);
+                }
+                seen.push((*node.as_ptr()).key);
+            };
+            match way {
+                0 => (*queue).iter_ptr().for_each(&mut visit),
+                1 => (*queue).iter_ptr().rev().for_each(&mut visit),
+                2 => {
+                    for node in (*queue).iter_ptr() {
+                        visit(node);
+                    }
+                }
+                _ => {
+                    for node in (*queue).iter_ptr().rev() {
+                        visit(node);
+                    }
+                }
+            }
+            (*queue).clear();
+        }
+        let expected: [u32; 3] = if way.is_multiple_of(2) {
+            [1, 2, 3]
+        } else {
+            [4, 3, 2]
+        };
+        assert_eq!(seen, expected);
+    }
+}
+
+/// The same review found that the head's `repr(C)` promised a count of a
+/// word without `Counted` being `repr(transparent)`.
+#[test]
+fn a_count_is_one_word() {
+    assert_eq!(size_of::<Counted>(), size_of::<usize>());
+    assert_eq!(size_of::<CountedQueue<'static>>(), 3 * size_of::<usize>());
+}
+
+// Review 3, mutation testing: each test below fails for a mutant no other
+// test noticed.  Append to tests/regressions.rs.
+
+/// Mutants M02 and M03: the membership walk debug builds run for a node
+/// named by address goes toward both ends at once, so a node next to
+/// either end of a long queue costs a step or two.  A walk toward one end
+/// only costs thousands of times more at the other.
+#[cfg(debug_assertions)]
+#[cfg_attr(miri, ignore = "times a walk")]
+#[test]
+fn membership_walks_toward_the_nearer_end() {
+    use core::hint::black_box;
+    use core::iter::repeat_with;
+    use core::time::Duration;
+    use std::time::Instant;
+
+    const NODES: usize = 1 << 13;
+    const CALLS: usize = 1 << 12;
+    let mut nodes: Vec<Node> = repeat_with(|| Node {
+        link: Link::new(),
+        key: 0,
+    })
+    .take(NODES)
+    .collect();
+    let queue: Queue<'_> = nodes.iter_mut().collect();
+    let time = |node: Option<NonNull<Node>>| {
+        let trials: u32 = 5;
+        let mut best = Duration::MAX;
+        for _ in 0..trials {
+            let start = Instant::now();
+            for _ in 0..CALLS {
+                if let Some(at) = node {
+                    // SAFETY: the node is on this queue.
+                    let cursor = unsafe { queue.cursor_from_ptr(at) };
+                    let _: Option<NonNull<Node>> =
+                        black_box(cursor.current_ptr());
+                }
+            }
+            best = best.min(start.elapsed());
+        }
+        best
+    };
+    let near_front = time(queue.iter_ptr().nth(1));
+    let near_back = time(queue.iter_ptr().nth(NODES.wrapping_sub(2)));
+    let slack = Duration::from_millis(2);
+    assert!(
+        near_front < near_back * 50 + slack
+            && near_back < near_front * 50 + slack,
+        "front {near_front:?}, back {near_back:?}"
+    );
+}
+
+/// Mutant M12: a cursor found by address reaches the node through the
+/// pointer it was pushed with, not the one it was found by.  Here that one
+/// comes from a `&Node`, which may not write the node, so Miri fails this
+/// test if the cursor kept it.
+#[test]
+fn a_cursor_found_by_a_read_only_pointer_hands_back_the_push_access() {
+    let mut nodes = nodes::<3>();
+    {
+        let mut queue: Queue<'_> = nodes.iter_mut().collect();
+        let second = queue.iter().nth(1).map(NonNull::from);
+        assert!(second.is_some(), "three nodes");
+        if let Some(read_only) = second {
+            let removed = queue
+                .cursor_mut_find_ptr(read_only)
+                .and_then(|mut cursor| cursor.remove_current());
+            if let Some(node) = removed {
+                node.key = 20;
+            }
+        }
+        let first = queue.front().map(NonNull::from);
+        assert!(first.is_some(), "two nodes");
+        if let Some(read_only) = first {
+            let pushed = queue
+                .cursor_find_ptr(read_only)
+                .and_then(|cursor| cursor.current_ptr());
+            if let Some(writable) = pushed {
+                // SAFETY: the node was pushed as `&mut`, and no `&Node` is
+                // alive.
+                unsafe { (*writable.as_ptr()).key = 10 };
+            }
+        }
+    }
+    assert_eq!(nodes.map(|node| node.key), [10, 20, 3]);
+}
+
+/// Mutants M14 and M15: `IterMut`'s `fold` and `rfold` lend the payloads
+/// in order, which a sum cannot tell.
+#[test]
+fn payload_folds_keep_their_order() {
+    let mut nodes = nodes::<4>();
+    let mut queue: Queue<'_> = nodes.iter_mut().collect();
+    let push = |mut seen: Vec<u32>, key: &mut u32| {
+        seen.push(*key);
+        seen
+    };
+    let forward = queue.iter_mut().fold(Vec::new(), push);
+    let backward = queue.iter_mut().rfold(Vec::new(), push);
+    assert_eq!((forward, backward), (vec![1, 2, 3, 4], vec![4, 3, 2, 1]));
+    let mut partly = queue.iter_mut();
+    assert!(partly.next().is_some() && partly.next_back().is_some());
+    let middle = partly.fold(Vec::new(), push);
+    assert_eq!(middle, [2, 3]);
+}
+
+/// Mutant M16: an uncounted queue's iterators count every node left, not
+/// the lower bound of their size hint, which is two from two nodes on.
+#[test]
+fn uncounted_iterators_count_every_node() {
+    let mut nodes = nodes::<4>();
+    let queue: Queue<'_> = nodes.iter_mut().collect();
+    let mut iter = queue.iter();
+    assert_eq!(iter.clone().count(), 4);
+    assert!(iter.next().is_some());
+    assert_eq!(iter.count(), 3);
+}
+
+/// A node whose payload ends where its link starts.
+#[repr(C)]
+struct Before {
+    key: u64,
+    link: Link,
+}
+
+/// A node whose payload starts where its link ends.
+#[repr(C)]
+struct After {
+    link: Link,
+    key: u64,
+}
+
+tailq::adapter!(BeforeLink = Before { link, mut key: u64 });
+tailq::adapter!(AfterLink = After { link, mut key: u64 });
+
+/// Mutant M26: a payload may touch the link on either side; only an
+/// overlap fails the check.
+#[test]
+fn payloads_may_touch_the_link() {
+    check_payload::<BeforeLink>();
+    check_payload::<AfterLink>();
+    let mut before = Before {
+        key: 1,
+        link: Link::new(),
+    };
+    let mut after = After {
+        link: Link::new(),
+        key: 2,
+    };
+    let mut one = TailQueue::<'_, BeforeLink>::new();
+    let mut two = TailQueue::<'_, AfterLink>::new();
+    one.push_back(&mut before);
+    two.push_back(&mut after);
+    if let (Some(first), Some(second)) = (one.front_mut(), two.front_mut()) {
+        *first = first.wrapping_add(10);
+        *second = second.wrapping_add(20);
+    }
+    let keys = (
+        one.front().map(|node| node.key),
+        two.back().map(|node| node.key),
+    );
+    assert_eq!(keys, (Some(11), Some(22)));
+}
+
+/// Requirement audit, e54b390: the iterators are `FusedIterator`, which
+/// generic code may rely on.  Mutant M33 drops one impl.
+#[test]
+fn iterators_are_fused() {
+    use core::iter::FusedIterator;
+
+    const fn fused<I>(_: &I)
+    where
+        I: FusedIterator,
+    {
+    }
+    let mut nodes = nodes::<1>();
+    let mut queue: Queue<'_> = nodes.iter_mut().collect();
+    fused(&queue.iter());
+    fused(&queue.iter_ptr());
+    fused(&queue.iter_mut());
+}
+
+/// Requirement audit, 6a21a14: a head is `repr(C)`, the first node's link,
+/// the last node's, then the length.  Mutant M35 drops the `repr(C)`; only
+/// a layout that reorders the fields, as `-Zrandomize-layout` may, shows it.
+#[test]
+fn a_head_holds_first_last_then_count() {
+    /// The head's documented layout.
+    #[repr(C)]
+    struct Words {
+        first: Option<NonNull<Link>>,
+        last: Option<NonNull<Link>>,
+        count: usize,
+    }
+
+    let mut nodes = nodes::<3>();
+    let ends = (
+        nodes.first().map(|node| (&raw const node.link).addr()),
+        nodes.last().map(|node| (&raw const node.link).addr()),
+    );
+    let queue: CountedQueue<'_> = nodes.iter_mut().collect();
+    // SAFETY: the head is `repr(C)` with those three words.
+    let words = unsafe { (&raw const queue).cast::<Words>().read() };
+    let read = (
+        words.first.map(NonNull::addr).map(usize::from),
+        words.last.map(NonNull::addr).map(usize::from),
+    );
+    assert_eq!((read, words.count), (ends, 3));
+}
+
+/// Requirement audit, 6a21a14: a head in a `ManuallyDrop` leaves its nodes
+/// alone when it goes, still marked as linked.
+#[test]
+fn a_forgotten_head_leaves_its_nodes_marked() {
+    use core::mem::ManuallyDrop;
+
+    let mut nodes = nodes::<2>();
+    {
+        let queue: ManuallyDrop<Queue<'_>> =
+            ManuallyDrop::new(nodes.iter_mut().collect());
+        assert_eq!(queue.iter().count(), 2);
+    }
+    assert!(nodes.iter().all(|node| node.link.is_linked()));
 }

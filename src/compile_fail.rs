@@ -330,3 +330,146 @@
 //! queue.push_back(&mut node);
 //! queue.cursor_front_mut().remove_current();
 //! ```
+//!
+//! A payload reached through a union, whose other fields could leave it
+//! invalid, a `bool` holding 3 for one:
+//!
+//! ```compile_fail,E0133
+//! use tailq::Link;
+//! #[derive(Clone, Copy)]
+//! union Bits { flag: bool, byte: u8 }
+//! struct Node { link: Link, bits: Bits }
+//! tailq::adapter!(NodeLink = Node { link, mut bits.flag: bool });
+//! ```
+//!
+//! A packed node is rejected even in a crate whose own `core` has an
+//! `assert!` that checks nothing: the check runs in this crate.
+//!
+//! ```compile_fail,E0080
+//! extern crate self as core;
+//! pub use std::{clone, fmt, marker};
+//! pub mod mem { pub use std::mem::*; }
+//! #[macro_export]
+//! macro_rules! assert { ($($tokens:tt)*) => {}; }
+//! use tailq::Link;
+//! #[repr(C, packed)]
+//! struct Node { tag: u8, link: Link }
+//! tailq::adapter!(NodeLink = Node { link });
+//! fn main() {}
+//! ```
+//!
+//! The macro's rules check what they paste into an impl header, even
+//! called directly: a brace group in the payload rule's bounds cannot
+//! close the header and supply the body,
+//!
+//! ```compile_fail
+//! use tailq::Link;
+//! struct Node { link: Link, key: u64 }
+//! tailq::adapter!(NodeLink = Node { link });
+//! trait Sink { type Payload; const PAYLOAD_OFFSET: usize; }
+//! tailq::__adapter!(@payload NodeLink [] [] [
+//!     { type Payload = u64; const PAYLOAD_OFFSET: usize = 4096; }
+//!     impl Sink for NodeLink
+//! ] Node, [key: u64]);
+//! ```
+//!
+//! nor can a `>` in its arguments,
+//!
+//! ```compile_fail
+//! use tailq::Link;
+//! struct Node { link: Link, key: u64 }
+//! tailq::adapter!(NodeLink = Node { link });
+//! trait Sink { type Payload; const PAYLOAD_OFFSET: usize; }
+//! tailq::__adapter!(@payload NodeLink [] [
+//!     > where { type Payload = &'static u64; const PAYLOAD_OFFSET: usize = 16; }
+//!     impl Sink for NodeLink<
+//! ] [] Node, [key: u64]);
+//! ```
+//!
+//! nor one in the arguments of the rule that declares the adapter:
+//!
+//! ```compile_fail
+//! use tailq::Link;
+//! struct Node { link: Link }
+//! struct Other;
+//! trait Sink { type Node; const OFFSET: usize; }
+//! tailq::__adapter!(@define [NodeLink] [] [
+//!     > { type Node = Node; const OFFSET: usize = 4096; } impl Sink for Other<
+//! ] = Node { link });
+//! ```
+//!
+//! Review 3, mutant M22: a generic adapter cannot be checked where it is
+//! declared, so the queue checks it where it first lends a payload:
+//!
+//! ```compile_fail,E0080
+//! use tailq::{Link, TailQueue};
+//! struct Wrapped<T> { link: Link, extra: T }
+//! tailq::adapter!(OverLink<T> = Wrapped<T> { link, mut link: Link });
+//! let mut queue = TailQueue::<OverLink<u8>>::new();
+//! let _ = queue.front_mut();
+//! ```
+//!
+//! Review 3, mutant M24: called directly, the macro's rules cannot measure
+//! a payload in another type than the adapter's node, here 64 bytes past
+//! the end of a 24-byte node, which the overlap check would pass:
+//!
+//! ```compile_fail,E0308
+//! use tailq::Link;
+//! #[repr(C)]
+//! struct Node { link: Link, key: u32 }
+//! #[repr(C)]
+//! struct Fake { link: Link, big: [u8; 64] }
+//! tailq::adapter!(NodeLink = Node { link });
+//! tailq::__adapter!(@payload NodeLink [] [] [] Fake, [big: [u8; 64]]);
+//! ```
+//!
+//! Mutant M32: an adapter with no parameters is checked where it is
+//! declared, even if no queue ever lends its payload:
+//!
+//! ```compile_fail,E0080
+//! use tailq::Link;
+//! struct Sched { link: Link, runtime: u64 }
+//! struct Thread { sched: Sched }
+//! tailq::adapter!(RunLink = Thread { sched.link, mut sched: Sched });
+//! ```
+//!
+//! Requirement audit, e54b390: every operation that hands a node back is
+//! `must_use`, not only `remove_current` (mutant M34 drops one):
+//!
+//! ```compile_fail
+//! #![deny(unused_must_use)]
+//! use tailq::{Link, TailQueue};
+//! struct Node { link: Link }
+//! tailq::adapter!(NodeLink = Node { link });
+//! let mut queue = TailQueue::<NodeLink>::new();
+//! queue.cursor_front_mut().remove_current_ptr();
+//! ```
+//!
+//! ```compile_fail
+//! #![deny(unused_must_use)]
+//! use tailq::{Link, TailQueue};
+//! struct Node { link: Link }
+//! tailq::adapter!(NodeLink = Node { link });
+//! let mut node = Node { link: Link::new() };
+//! let mut queue = TailQueue::<NodeLink>::new();
+//! // SAFETY: the node is live, on no queue, and outlives the queue.
+//! unsafe { queue.cursor_front_mut().replace_current_ptr((&mut node).into()) };
+//! ```
+//!
+//! ```compile_fail
+//! #![deny(unused_must_use)]
+//! use tailq::{Link, TailQueue};
+//! struct Node { link: Link }
+//! tailq::adapter!(NodeLink = Node { link });
+//! let mut queue = TailQueue::<NodeLink>::new();
+//! queue.pop_back();
+//! ```
+//!
+//! ```compile_fail
+//! #![deny(unused_must_use)]
+//! use tailq::{Link, TailQueue};
+//! struct Node { link: Link }
+//! tailq::adapter!(NodeLink = Node { link });
+//! let mut queue = TailQueue::<NodeLink>::new();
+//! queue.pop_front_ptr();
+//! ```

@@ -372,10 +372,16 @@ macro_rules! __adapter {
         $(#[$attr])*
         #[derive(Clone, Copy, Debug)]
         $vis struct $name<$($decl)*>(
-            ::core::convert::Infallible,
-            ::core::marker::PhantomData<fn() -> $node>,
+            $crate::__private::Infallible,
+            $crate::__private::PhantomData<fn() -> $node>,
         )
         $(where $($bound)+)?;
+
+        // These rules can be called directly, so each checks what it pastes
+        // into an impl header on an item that ends at it first: anything
+        // that does not fit there fails to parse, rather than closing the
+        // header and taking the place of its body.
+        $crate::__adapter!(@headers $name [$($decl)*] [$($arg)*] [$($($bound)+)?]);
 
         // A lifetime parameter shows once in these headers.
         #[allow(single_use_lifetimes)]
@@ -392,7 +398,7 @@ macro_rules! __adapter {
             type Node = $node;
 
             const OFFSET: usize = {
-                let mut slot = ::core::mem::MaybeUninit::<$node>::uninit();
+                let mut slot = $crate::__private::MaybeUninit::<$node>::uninit();
                 let node = slot.as_mut_ptr();
                 // A raw place, which is never deref-coerced: rejects a
                 // field that only derefs to a link.
@@ -400,14 +406,11 @@ macro_rules! __adapter {
                 // reads it.
                 let _: *mut $crate::Link =
                     unsafe { &raw mut (*node).$($field).+ };
-                let offset = ::core::mem::offset_of!($node, $($field).+);
                 // Aligned in every node: rejects a packed node that could
                 // leave the link unaligned.
-                ::core::assert!(
-                    $crate::__private::aligned::<$node, $crate::Link>(offset),
-                    "tailq::adapter!: the link is not aligned in every node",
-                );
-                offset
+                $crate::__private::link_offset::<$node>(
+                    $crate::__private::offset_of!($node, $($field).+),
+                )
             };
         }
 
@@ -416,6 +419,18 @@ macro_rules! __adapter {
             @payload $name [$($decl)*] [$($arg)*] [$($($bound)+)?] $node,
                 [$($($payload).+ : $payload_ty)?]
         );
+    };
+    (
+        @headers $name:ident [$($decl:tt)*] [$($arg:tt)*] [$($bound:tt)*]
+    ) => {
+        const _: () = {
+            #[allow(dead_code)]
+            struct Headers<$($decl)*>(
+                $crate::__private::PhantomData<fn() -> $name<$($arg)*>>,
+            )
+            where
+                $($bound)*;
+        };
     };
     // An adapter with no parameters is checked where it is declared; a
     // generic one where it is first used.
@@ -435,6 +450,8 @@ macro_rules! __adapter {
         @payload $name:ident [$($decl:tt)*] [$($arg:tt)*] [$($bound:tt)*]
             $node:ty, [$($payload:ident).+ : $payload_ty:ty]
     ) => {
+        $crate::__adapter!(@headers $name [$($decl)*] [$($arg)*] [$($bound)*]);
+
         // SAFETY: `PAYLOAD_OFFSET` is the offset of the field of the
         // adapter's node, which the raw place proves is a `$payload_ty` and
         // the assertion proves is aligned; the queue checks that it lies
@@ -447,7 +464,7 @@ macro_rules! __adapter {
             type Payload = $payload_ty;
 
             const PAYLOAD_OFFSET: usize = {
-                let mut slot = ::core::mem::MaybeUninit::<$node>::uninit();
+                let mut slot = $crate::__private::MaybeUninit::<$node>::uninit();
                 let node = slot.as_mut_ptr();
                 // The adapter's own node.
                 let _: *mut <Self as $crate::Adapter>::Node = node;
@@ -457,14 +474,15 @@ macro_rules! __adapter {
                 // reads it.
                 let _: *mut $payload_ty =
                     unsafe { &raw mut (*node).$($payload).+ };
-                let offset = ::core::mem::offset_of!($node, $($payload).+);
+                // A reference to the field: rejects a path through a union,
+                // whose other fields could leave the payload invalid.
+                let _: for<'node> fn(&'node $node) -> &'node $payload_ty =
+                    |node| &node.$($payload).+;
                 // Aligned in every node: rejects a packed field that could
                 // leave the payload unaligned.
-                ::core::assert!(
-                    $crate::__private::aligned::<$node, $payload_ty>(offset),
-                    "tailq::adapter!: the payload is not aligned in every node",
-                );
-                offset
+                $crate::__private::payload_offset::<$node, $payload_ty>(
+                    $crate::__private::offset_of!($node, $($payload).+),
+                )
             };
         }
 

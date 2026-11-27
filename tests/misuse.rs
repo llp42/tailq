@@ -12,6 +12,7 @@
     reason = "an integration test crate is itself the test module"
 )]
 
+use core::mem::ManuallyDrop;
 use core::panic::AssertUnwindSafe;
 use core::ptr::{self, NonNull};
 use std::panic::catch_unwind;
@@ -334,4 +335,178 @@ fn a_caught_membership_check_leaves_both_queues_as_they_were() {
             (vec![3, 4, 5], vec![5, 4, 3], 3)
         ]
     );
+}
+
+// Review 3, mutation testing: each test below fails when one debug check is
+// left out, which no other test noticed.  Append to tests/misuse.rs, and add
+// `use core::mem::ManuallyDrop;` to its imports.
+
+/// Mutant M01: the membership walk reaches the far end of another queue's
+/// back half first, and must check that end too.
+#[test]
+#[should_panic(expected = "tail queue: the link is not on this queue")]
+fn no_cursor_rests_on_a_node_near_the_back_of_another_queue() {
+    let nodes = Nodes::new(6);
+    let mut one = Queue::new();
+    let mut two = Queue::new();
+    // SAFETY: the nodes are live and outlive both queues, and each is on
+    // no queue when pushed; a cursor on the fourth node of five of `two`
+    // is the misuse.
+    unsafe {
+        one.push_back_ptr(nodes.at(0));
+        for i in 1..6 {
+            two.push_back_ptr(nodes.at(i));
+        }
+        let cursor = one.cursor_from_ptr(nodes.at(4));
+        assert!(cursor.current().is_some(), "unreachable");
+    }
+}
+
+/// A head of two nodes and a bitwise copy of it, as C code holding a copy
+/// would keep; the copy is never dropped.
+fn stale_copy(nodes: &Nodes) -> (Queue, ManuallyDrop<Queue>) {
+    let mut queue = Queue::new();
+    // SAFETY: the nodes are live and outlive the queue, and each is on no
+    // queue when pushed.
+    unsafe {
+        queue.push_back_ptr(nodes.at(0));
+        queue.push_back_ptr(nodes.at(1));
+    }
+    // SAFETY: a head is plain pointers, and the copy is never dropped.
+    let copy = ManuallyDrop::new(unsafe { ptr::read(&raw const queue) });
+    (queue, copy)
+}
+
+/// Mutant M04: a link with no next is the last of the queue that pops it.
+#[test]
+#[should_panic(expected = "tail queue: the link is not on this queue")]
+fn a_stale_head_does_not_pop_a_node_that_became_last() {
+    let nodes = Nodes::new(2);
+    let (mut queue, mut stale) = stale_copy(&nodes);
+    assert!(queue.pop_back_ptr().is_some(), "two nodes");
+    // The stale head's first node is now the queue's last, not its own.
+    assert!(stale.pop_front_ptr().is_none(), "unreachable");
+}
+
+/// Mutant M05: a link with no previous link is the first of the queue
+/// that pops it.
+#[test]
+#[should_panic(expected = "tail queue: the link is not on this queue")]
+fn a_stale_head_does_not_pop_a_node_that_became_first() {
+    let nodes = Nodes::new(2);
+    let (mut queue, mut stale) = stale_copy(&nodes);
+    assert!(queue.pop_front_ptr().is_some(), "two nodes");
+    assert!(stale.pop_back_ptr().is_none(), "unreachable");
+}
+
+/// Mutant M06: a head in a `ManuallyDrop` leaves its nodes marked as
+/// linked, and safe code then pushing one at the back is caught.
+#[test]
+#[should_panic(expected = "tail queue: the link is already on a queue")]
+fn a_node_a_forgotten_head_left_linked_cannot_be_pushed_at_the_back() {
+    let mut node = Node {
+        key: 0,
+        link: Link::new(),
+    };
+    {
+        let mut forgotten = ManuallyDrop::new(TailQueue::<'_, NodeLink>::new());
+        forgotten.push_back(&mut node);
+    }
+    let mut queue = TailQueue::<'_, NodeLink>::new();
+    queue.push_back(&mut node);
+}
+
+/// Mutant M07: linking before a node checks the new link too.
+#[test]
+#[should_panic(expected = "tail queue: the link is already on a queue")]
+fn a_linked_node_cannot_be_inserted_before() {
+    let nodes = Nodes::new(3);
+    let mut queue = Queue::new();
+    let mut other = Queue::new();
+    // SAFETY: as above; inserting `other`'s node is the misuse.
+    unsafe {
+        queue.push_back_ptr(nodes.at(0));
+        queue.push_back_ptr(nodes.at(1));
+        other.push_back_ptr(nodes.at(2));
+        queue.cursor_back_mut().insert_before_ptr(nodes.at(2));
+    }
+}
+
+/// Two queues of two, the last node of `queue` overwritten by the last of
+/// `other`, so that its `prev` names a node whose `next` is not it; the
+/// fifth node is a spare on no queue.
+fn overwritten_last(nodes: &Nodes) -> (Queue, Queue) {
+    let mut queue = Queue::new();
+    let mut other = Queue::new();
+    // SAFETY: the nodes are live and outlive both queues, and each is on
+    // no queue when pushed; the copy is the misuse.
+    unsafe {
+        queue.push_back_ptr(nodes.at(0));
+        queue.push_back_ptr(nodes.at(1));
+        other.push_back_ptr(nodes.at(2));
+        other.push_back_ptr(nodes.at(3));
+        ptr::copy_nonoverlapping(nodes.at(3).as_ptr(), nodes.at(1).as_ptr(), 1);
+    }
+    (queue, other)
+}
+
+/// Mutant M08: linking after a node checks that node first.
+#[test]
+#[should_panic(
+    expected = "tail queue: the previous link does not point at this one"
+)]
+fn no_node_is_linked_after_an_overwritten_node() {
+    let nodes = Nodes::new(5);
+    let (mut queue, _other) = overwritten_last(&nodes);
+    // SAFETY: the spare is live and on no queue.
+    unsafe { queue.cursor_back_mut().insert_after_ptr(nodes.at(4)) };
+}
+
+/// Mutant M09: linking before a node checks that node first; without it
+/// the new node is linked into `other`.
+#[test]
+#[should_panic(
+    expected = "tail queue: the previous link does not point at this one"
+)]
+fn no_node_is_linked_before_an_overwritten_node() {
+    let nodes = Nodes::new(5);
+    let (mut queue, _other) = overwritten_last(&nodes);
+    // SAFETY: as above.
+    unsafe { queue.cursor_back_mut().insert_before_ptr(nodes.at(4)) };
+}
+
+/// Mutant M10: replacing a node checks it first.
+#[test]
+#[should_panic(
+    expected = "tail queue: the previous link does not point at this one"
+)]
+fn an_overwritten_node_is_not_replaced() {
+    let nodes = Nodes::new(5);
+    let (mut queue, _other) = overwritten_last(&nodes);
+    // SAFETY: as above.
+    let replaced =
+        unsafe { queue.cursor_back_mut().replace_current_ptr(nodes.at(4)) };
+    assert!(replaced.is_none(), "unreachable");
+}
+
+/// Mutant M11: popping the front checks the first node.  The queue's walk
+/// would enter `other` through the copy, so it is never dropped.
+#[test]
+#[should_panic(expected = "tail queue: the next link does not point back")]
+fn a_first_node_overwritten_by_another_is_not_popped() {
+    let nodes = Nodes::new(4);
+    let mut queue = ManuallyDrop::new(Queue::new());
+    let mut other = Queue::new();
+    // SAFETY: the nodes are live and outlive both queues, and each is on
+    // no queue when pushed.  Copying the first node of `other` over the
+    // first of `queue` is the misuse: the copy's `next` names a node whose
+    // `prev` is not it.
+    unsafe {
+        queue.push_back_ptr(nodes.at(0));
+        queue.push_back_ptr(nodes.at(1));
+        other.push_back_ptr(nodes.at(2));
+        other.push_back_ptr(nodes.at(3));
+        ptr::copy_nonoverlapping(nodes.at(2).as_ptr(), nodes.at(0).as_ptr(), 1);
+    }
+    assert!(queue.pop_front_ptr().is_none(), "unreachable");
 }
