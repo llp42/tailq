@@ -26,8 +26,8 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           components: clippy
-      # The lint levels, pedantic and nursery included, are in Cargo.toml.
-      - run: cargo clippy --all-targets --locked
+      # The lint levels, pedantic and nursery included, are in Cargo.toml, for every crate of the workspace.
+      - run: cargo clippy --workspace --all-targets --locked
 
   fmt:
     runs-on: ubuntu-latest
@@ -36,7 +36,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt
-      - run: cargo fmt --check
+      - run: cargo fmt --all --check
 
   doc:
     runs-on: ubuntu-latest

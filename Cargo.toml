@@ -10,16 +10,17 @@ repository = "https://github.com/llp42/tailq"
 readme = "README.md"
 keywords = ["intrusive", "linked-list", "queue", "no-std", "tailq"]
 categories = ["data-structures", "no-std", "no-std::no-alloc", "embedded"]
-include = ["/src", "/tests", "/benches", "/README.md", "/LICENSE"]
+include = ["/src", "/tests", "/README.md", "/LICENSE"]
 
-[dev-dependencies]
-criterion = { version = "=0.8.2", default-features = false, features = ["cargo_bench_support"] }
+[workspace]
+# The benches live in their own crate, so that criterion is no dependency of this one: Miri on other targets then builds
+# nothing but the crate and its tests.
+members = ["bench"]
 
-[[bench]]
-name = "tailq"
-harness = false
+[lints]
+workspace = true
 
-[lints.rust]
+[workspace.lints.rust]
 warnings = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 unfulfilled_lint_expectations = "deny"
@@ -46,7 +47,7 @@ unnameable_types = "deny"
 variant_size_differences = "deny"
 rust_2018_idioms = { level = "deny", priority = -1 }
 
-[lints.clippy]
+[workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }

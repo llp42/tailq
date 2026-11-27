@@ -30,7 +30,7 @@ jobs:
         env:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "tailq") | .version')
           if [[ "$HEAD_REF" != "rc/$version" ]]; then
             echo "::error::branch $HEAD_REF does not match the crate version $version"
             exit 1
@@ -38,7 +38,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
       # Here, with no publish credentials: the tests, and the crate as cargo publish uploads it, built on its own.
       - run: cargo test --locked
-      - run: cargo package --locked
+      - run: cargo package --locked -p tailq
 
   publish:
     # Only once verify passed, so under its guards as well.
@@ -63,7 +63,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
       - id: auth
         uses: rust-lang/crates-io-auth-action@v1
-      - run: cargo publish --locked
+      - run: cargo publish --locked -p tailq
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
       # Only once the version is published: v0.2.0 on the commit the merge made.

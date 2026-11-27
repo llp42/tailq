@@ -261,8 +261,8 @@
 //! tailq::adapter!(NodeLink = Node { sched.link });
 //! ```
 //!
-//! A payload of another type than its field's, or one a packed node may
-//! leave unaligned while its link stays aligned:
+//! A payload of another type than its field's, or one inside a packed
+//! field, which may leave it unaligned while the link stays aligned:
 //!
 //! ```compile_fail,E0308
 //! use tailq::Link;
@@ -272,7 +272,8 @@
 //!
 //! ```compile_fail,E0793
 //! use tailq::Link;
-//! #[repr(C, packed(8))]
-//! struct Node { link: Link, key: u128 }
-//! tailq::adapter!(NodeLink = Node { link, mut key: u128 });
+//! #[repr(C, packed)]
+//! struct Packed { tag: u8, key: u32 }
+//! struct Node { link: Link, packed: Packed }
+//! tailq::adapter!(NodeLink = Node { link, mut packed.key: u32 });
 //! ```

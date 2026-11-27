@@ -81,19 +81,29 @@ Rust 1.99.
 CI runs these checks on each PR:
 
 ```sh
-cargo fmt --check
-cargo clippy --all-targets --locked
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked
 cargo test --locked
 cargo test --locked --release
+cargo test --locked -p tailq-bench --benches
 cargo doc --no-deps --locked
 cargo build --locked --target x86_64-unknown-none
-MIRIFLAGS=-Zmiri-strict-provenance cargo +nightly miri test --locked
+cargo +nightly test --locked --doc
+MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check" cargo +nightly miri test --locked
 MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo +nightly miri test --locked
+MIRIFLAGS=-Zmiri-strict-provenance cargo +nightly miri test --locked --release
+MIRIFLAGS=-Zmiri-strict-provenance cargo +nightly miri test --locked --target i686-unknown-linux-gnu
+MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo +nightly miri test --locked --target s390x-unknown-linux-gnu
 ```
 
 `Cargo.toml` denies every warning, Clippy's pedantic, nursery, cargo and restriction groups included, so these checks
 need no flags. CI runs them on the toolchains pinned in `.github/actions/setup-rust` and `.github/workflows/test.yml`.
-The no_std build needs its target: `rustup target add x86_64-unknown-none`.
+The no_std build needs its target: `rustup target add x86_64-unknown-none`. The doctests run on nightly as well,
+because only nightly rustdoc checks the error code of a `compile_fail` block. Miri runs on a 32-bit and a big-endian
+target too.
+
+The benches are in their own crate, `bench/`, so that criterion is no dependency of `tailq`: `cargo bench -p
+tailq-bench`.
 
 CI also packages the crate, builds the library on Rust 1.99, the minimum, and lints the Markdown with markdownlint-cli2.
 
