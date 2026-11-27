@@ -9,7 +9,9 @@
 
 #![cfg(all(target_os = "linux", not(miri)))]
 
+use std::env;
 use std::fs;
+use std::process::Command;
 
 /// The most data memory a test may use.
 const MEMORY: u64 = 512 << 20;
@@ -38,16 +40,69 @@ fn tests_run_under_a_memory_limit_and_a_timeout() {
     let command =
         fs::read_to_string(format!("/proc/{parent}/cmdline")).unwrap();
     let words: Vec<&str> = command.split('\0').collect();
-    let seconds = words
-        .iter()
-        .skip(1)
-        .find(|word| !word.starts_with('-'))
-        .and_then(|word| word.parse::<u64>().ok());
+    // The duration is `timeout`'s first operand: `-k` and `-s` take the
+    // word after them, unless it is joined to them, and `--` ends the
+    // options.
+    let mut rest = words.iter().skip(1);
+    let mut duration = None;
+    while let Some(&word) = rest.next() {
+        match word {
+            "-k" | "--kill-after" | "-s" | "--signal" => {
+                let _: Option<&&str> = rest.next();
+            }
+            "--" => {
+                duration = rest.next().copied();
+                break;
+            }
+            _ if word.starts_with('-') => {}
+            _ => {
+                duration = Some(word);
+                break;
+            }
+        }
+    }
+    // A duration of zero turns the timeout off.
+    let seconds = duration.and_then(|word| word.parse::<u64>().ok());
     assert!(
         words
             .first()
             .is_some_and(|program| program.ends_with("timeout"))
-            && seconds.is_some_and(|seconds| seconds <= SECONDS),
+            && seconds.is_some_and(|seconds| (1..=SECONDS).contains(&seconds)),
         "a test runs under {words:?}, not a timeout of at most {SECONDS} seconds: run it through .github/limit.sh",
     );
+}
+
+/// Runs the check above alone in a child of this binary, under two
+/// wrappers that set no timeout of at most ten minutes: `limit.sh` with
+/// `LIMIT_SECONDS=0`, which runs `timeout` with a duration of zero and so
+/// with no timeout, and `timeout -k 10 6000`, a timeout of 6000 seconds
+/// with a kill delay of ten.  The check fails in both children.
+#[test]
+fn the_check_fails_without_a_timeout_of_at_most_ten_minutes() {
+    const CHECK: &str = "tests_run_under_a_memory_limit_and_a_timeout";
+    let exe = env::current_exe().unwrap();
+    let mut off =
+        Command::new(concat!(env!("CARGO_MANIFEST_DIR"), "/.github/limit.sh"));
+    let _: &mut Command = off.env("LIMIT_SECONDS", "0").arg(&exe).args([
+        "--exact",
+        CHECK,
+        "--test-threads=1",
+    ]);
+    let mut looser = Command::new("sh");
+    let _: &mut Command = looser
+        .arg("-c")
+        .arg(
+            "ulimit -d 524288 && exec timeout -k 10 6000 \"$0\" --exact \"$1\" \
+             --test-threads=1",
+        )
+        .arg(&exe)
+        .arg(CHECK);
+    for (name, mut run) in
+        [("LIMIT_SECONDS=0", off), ("timeout -k 10 6000", looser)]
+    {
+        let output = run.output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("running 1 test"), "{name}: {stdout}");
+        assert!(!output.status.success(), "the check passes under {name}");
+    }
 }
