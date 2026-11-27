@@ -61,11 +61,20 @@ impl<'head, 'nodes, A: Adapter, C: Count> Cursor<'head, 'nodes, A, C> {
 
     /// Moves to the next node: from the last node to the ghost, and from
     /// the ghost to the front.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when the node at the cursor has left the queue.
     #[inline]
-    pub const fn move_next(&mut self) {
+    pub fn move_next(&mut self) {
         // SAFETY: the cursor rests on the queue's ghost or on one of its
         // nodes.
-        self.current = unsafe { self.queue.next_after(self.current) };
+        let next = unsafe { self.queue.next_after(self.current) };
+        debug_assert!(
+            !is(next, NOWHERE),
+            "tail queue: the node at the cursor has left the queue",
+        );
+        self.current = next;
     }
 
     /// Moves to the previous node: from the first node to the ghost, and
@@ -174,8 +183,12 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
 
     /// Moves to the next node: from the last node to the ghost, and from
     /// the ghost to the front.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when the node at the cursor has left the queue.
     #[inline]
-    pub const fn move_next(&mut self) {
+    pub fn move_next(&mut self) {
         let mut cursor = self.as_cursor();
         cursor.move_next();
         self.current = cursor.current;

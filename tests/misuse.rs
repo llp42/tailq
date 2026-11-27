@@ -605,6 +605,33 @@ fn a_stale_head_whose_first_left_removes_nothing() {
     unsafe { stale.remove_ptr(nodes.at(3)) };
 }
 
+/// A cursor does not step off a node that left while the cursor was in
+/// use: the forward word it reads is the one debug builds fill a leaving
+/// link's with.  Here code that reaches a head by pointer removes the
+/// middle of three nodes under a cursor resting on it.  Under Miri,
+/// Stacked Borrows refuses the cursor's borrow of the head first.
+#[test]
+#[cfg_attr(miri, ignore = "Stacked Borrows refuses the cursor's borrow first")]
+#[should_panic(
+    expected = "tail queue: the node at the cursor has left the queue"
+)]
+fn a_cursor_does_not_step_off_a_node_that_left() {
+    let nodes = Nodes::new(3);
+    let mut head = Queue::new();
+    let queue = ptr::from_mut(&mut head);
+    // SAFETY: the nodes are live and outlive the queue, and each is on no
+    // queue when pushed; removing the middle one while the cursor is in
+    // use is the misuse.
+    unsafe {
+        for i in 0..3 {
+            (*queue).push_back_ptr(nodes.at(i));
+        }
+        let mut cursor = (*queue).cursor_from_ptr(nodes.at(1));
+        (*queue).remove_ptr(nodes.at(1));
+        cursor.move_next();
+    }
+}
+
 /// Clearing a queue checks every link before it writes any, so a corrupt
 /// queue does not walk into another.  Here the first node of `queue` holds
 /// the bytes of the first of `other`.
