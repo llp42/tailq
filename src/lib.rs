@@ -519,9 +519,10 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// their operations, and in debug builds their checks, read the links
     /// of nodes they do not change.  Only [`remove_ptr`](Self::remove_ptr),
     /// given a pointer to the node taken from that `&mut`, and
-    /// [`contains_ptr`](Self::contains_ptr) reach the node through the
-    /// pointer they are given alone, or not at all, so a node borrowed so
-    /// can still look itself up and leave a queue.  `node` itself is not one
+    /// [`contains_ptr`](Self::contains_ptr), given the node's own address,
+    /// reach the node through the pointer they are given alone, or not at
+    /// all, so a node borrowed so can still look itself up and leave a
+    /// queue: a lookup of any other node may walk through this one.  `node` itself is not one
     /// to give `remove_ptr` then: the `&mut` came from it, and an access
     /// through it while the `&mut` is used is undefined behaviour.
     #[inline]
