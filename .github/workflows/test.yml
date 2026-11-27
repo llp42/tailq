@@ -93,7 +93,6 @@ jobs:
           FLAGS: ${{ matrix.flags }}
           ARGS: ${{ matrix.args }}
           SEEDS: ${{ matrix.seeds }}
-          LIMIT_SECONDS: 1200
 
   compile-fail:
     runs-on: ubuntu-latest
