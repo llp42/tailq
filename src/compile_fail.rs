@@ -523,3 +523,76 @@
 //! struct Node { link: Link, tag: u8 }
 //! tailq::adapter!(NodeLink = Node { link });
 //! ```
+//!
+//! Review 5, mutant A05: a payload field that only derefs to the payload's
+//! type fails to compile, here a `Box<u64>` that would be lent as the
+//! `u64` of its pointer, which safe code could then overwrite.  The raw
+//! place proves the field's type; the reference check alone, a closure's
+//! return and so a coercion site, would let the box deref to its `u64`:
+//!
+//! ```compile_fail,E0308
+//! use tailq::Link;
+//! struct Node { link: Link, key: Box<u64> }
+//! tailq::adapter!(NodeLink = Node { link, mut key: u64 });
+//! ```
+//!
+//! The fifth review found the node and payload types pasted several times
+//! into the expansion, and a type macro expands at each paste: a macro
+//! answering differently each time lent a 64-byte payload over a one-byte
+//! field.  Each type is pasted once now, and a payload whose one paste is
+//! not its field's type fails:
+//!
+//! ```compile_fail,E0308
+//! use tailq::Link;
+//! struct Node { link: Link, key: u8 }
+//! tailq::adapter!(NodeLink = Node { link, mut key: tailq_flip::flip!(k; [u8; 64], u8) });
+//! ```
+//!
+//! On nightly, `offset_of!` walks into an enum's variant, which a field
+//! access cannot, so the raw place went through a const `DerefMut` to
+//! another type's link while the offset was that of a reference; the
+//! place must now lie where `offset_of!` says:
+//!
+//! ```compile_fail,E0080
+//! #![feature(offset_of_enum, const_trait_impl, const_convert)]
+//! #![allow(non_snake_case, dangerous_implicit_autorefs)]
+//! use core::ops::{Deref, DerefMut};
+//! use tailq::Link;
+//! struct Inner { link: Link }
+//! struct Shadow { V: Inner }
+//! enum Node { V { link: (&'static u64, u64), shadow: Shadow } }
+//! const impl Deref for Node {
+//!     type Target = Shadow;
+//!     fn deref(&self) -> &Shadow { let Node::V { shadow, .. } = self; shadow }
+//! }
+//! const impl DerefMut for Node {
+//!     fn deref_mut(&mut self) -> &mut Shadow { let Node::V { shadow, .. } = self; shadow }
+//! }
+//! tailq::adapter!(NodeLink = Node { V.link });
+//! ```
+//!
+//! nor with a `DerefMut` that first writes the slot's variant, so that a
+//! link lies at the very offset of the variant field `offset_of!` names:
+//!
+//! ```compile_fail,E0080
+//! #![feature(offset_of_enum, const_trait_impl, const_convert)]
+//! #![allow(non_snake_case, dangerous_implicit_autorefs)]
+//! use core::ops::{Deref, DerefMut};
+//! use tailq::Link;
+//! struct Inner { link: Link }
+//! struct Shadow { V: Inner }
+//! enum Node { V { link: (&'static u64, u64) }, W { shadow: Shadow } }
+//! const impl Deref for Node {
+//!     type Target = Shadow;
+//!     fn deref(&self) -> &Shadow {
+//!         match self { Node::W { shadow } => shadow, Node::V { .. } => panic!() }
+//!     }
+//! }
+//! const impl DerefMut for Node {
+//!     fn deref_mut(&mut self) -> &mut Shadow {
+//!         *self = Node::W { shadow: Shadow { V: Inner { link: Link::new() } } };
+//!         match self { Node::W { shadow } => shadow, Node::V { .. } => panic!() }
+//!     }
+//! }
+//! tailq::adapter!(NodeLink = Node { V.link });
+//! ```

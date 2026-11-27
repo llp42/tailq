@@ -613,3 +613,71 @@ fn a_link_on_no_queue_met_mid_walk_is_caught() {
         queue.remove_ptr(nodes.at(1));
     }
 }
+
+/// Review 5: clearing a queue checks every link before it writes any, so
+/// a corrupt queue does not walk into another.  Here the first node of
+/// `queue` holds the bytes of the first of `other`.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_corrupt_queue_is_not_cleared() {
+    let nodes = Nodes::new(5);
+    let (mut queue, _other) = overwritten_first(&nodes);
+    queue.clear();
+}
+
+/// Review 5: dropping a corrupt queue writes nothing, rather than walk
+/// into another queue and mark its nodes as on no queue; the other queue
+/// is left whole.
+#[test]
+fn dropping_a_corrupt_queue_leaves_another_alone() {
+    let nodes = Nodes::new(5);
+    let (queue, other) = overwritten_first(&nodes);
+    drop(ManuallyDrop::into_inner(queue));
+    let keys: Vec<u32> = other.iter().map(|node| node.key).collect();
+    let keys_rev: Vec<u32> = other.iter().rev().map(|node| node.key).collect();
+    assert_eq!((keys, keys_rev), (vec![2, 3], vec![3, 2]));
+    assert!(other.iter().all(|node| node.link.is_linked()));
+}
+
+/// Review 5: the membership walk ahead meets a link that left a queue, its
+/// forward word `NOWHERE`, and reports it rather than follow it.  Here the
+/// fifth of six nodes holds the bytes of a node that left a queue.
+#[test]
+#[should_panic(expected = "tail queue: the link is on no queue")]
+fn the_membership_walk_ahead_catches_a_link_that_left() {
+    let nodes = Nodes::new(7);
+    let mut queue = ManuallyDrop::new(Queue::new());
+    let mut spare = Queue::new();
+    // SAFETY: the nodes are live and outlive the queues, and each is on no
+    // queue when pushed; copying a node that left over a linked one is the
+    // misuse.
+    unsafe {
+        for i in 0..6 {
+            queue.push_back_ptr(nodes.at(i));
+        }
+        spare.push_back_ptr(nodes.at(6));
+        assert!(spare.pop_front_ptr().is_some());
+        ptr::copy_nonoverlapping(nodes.at(6).as_ptr(), nodes.at(4).as_ptr(), 1);
+        queue.remove_ptr(nodes.at(3));
+    }
+}
+
+/// Review 5: clearing checks a link's forward word too.  Here the last of
+/// two nodes keeps its `prev` but has the forward word of a link that left
+/// a queue, `usize::MAX`, as if it had been half relinked.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_queue_with_a_half_relinked_node_is_not_cleared() {
+    let nodes = Nodes::new(2);
+    let mut queue = Queue::new();
+    // SAFETY: the nodes are live and outlive the queue, and each is on no
+    // queue when pushed.  A link is `repr(C)` and starts with its forward
+    // word; writing it is the misuse.
+    unsafe {
+        queue.push_back_ptr(nodes.at(0));
+        queue.push_back_ptr(nodes.at(1));
+        let link = ptr::from_ref(&(*nodes.at(1).as_ptr()).link);
+        link.cast::<usize>().cast_mut().write(usize::MAX);
+    }
+    queue.clear();
+}

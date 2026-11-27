@@ -27,16 +27,24 @@ pub const fn aligned<Node, Field>(offset: usize) -> bool {
     offset.is_multiple_of(align) && align_of::<Node>() >= align
 }
 
-/// Returns `offset`, the offset of a node's link, after checking that the
-/// link is aligned in every `Node`.  The check runs here, where `core` is
-/// the real one, not in the caller's crate, which could shadow it.
+/// Returns `offset`, the offset of a node's link, after checking it.
+///
+/// The link's place, `at` bytes into the node, must lie there, and the
+/// link must be aligned in every `Node`.  The check runs here, where
+/// `core` is the real one, not in the caller's crate, which could shadow
+/// it.
 ///
 /// # Panics
 ///
-/// At compile time, when the link could be unaligned.
+/// At compile time, when the link's place lies elsewhere, which a path
+/// through a deref makes it do, or when the link could be unaligned.
 #[must_use]
 #[inline]
-pub const fn link_offset<Node>(offset: usize) -> usize {
+pub const fn link_offset<Node>(offset: usize, at: isize) -> usize {
+    assert!(
+        at >= 0 && at.cast_unsigned() == offset,
+        "tailq::adapter!: the path reaches the link through a deref",
+    );
     assert!(
         aligned::<Node, Link>(offset),
         "tailq::adapter!: the link is not aligned in every node",
@@ -44,15 +52,20 @@ pub const fn link_offset<Node>(offset: usize) -> usize {
     offset
 }
 
-/// Returns `offset`, the offset of a node's payload, after checking that
-/// the payload is aligned in every `Node`, as [`link_offset`] does.
+/// Returns `offset`, the offset of a node's payload, after checking it
+/// as [`link_offset`] checks a link's.
 ///
 /// # Panics
 ///
-/// At compile time, when the payload could be unaligned.
+/// At compile time, when the payload's place lies elsewhere, or when the
+/// payload could be unaligned.
 #[must_use]
 #[inline]
-pub const fn payload_offset<Node, Payload>(offset: usize) -> usize {
+pub const fn payload_offset<Node, Payload>(offset: usize, at: isize) -> usize {
+    assert!(
+        at >= 0 && at.cast_unsigned() == offset,
+        "tailq::adapter!: the path reaches the payload through a deref",
+    );
     assert!(
         aligned::<Node, Payload>(offset),
         "tailq::adapter!: the payload is not aligned in every node",

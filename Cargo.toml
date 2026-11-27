@@ -15,7 +15,11 @@ include = ["/src", "/tests", "/README.md", "/LICENSE"]
 [workspace]
 # The benches live in their own crate, so that criterion is no dependency of this one: Miri on other targets then builds
 # nothing but the crate and its tests.
-members = ["bench"]
+members = ["bench", "testing/flip"]
+
+[dev-dependencies]
+# A type macro whose answer changes from one expansion to the next: adapter! must paste its types once.
+tailq-flip = { path = "testing/flip" }
 
 [lints]
 workspace = true

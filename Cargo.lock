@@ -356,6 +356,9 @@ dependencies = [
 [[package]]
 name = "tailq"
 version = "0.2.0"
+dependencies = [
+ "tailq-flip",
+]
 
 [[package]]
 name = "tailq-bench"
@@ -364,6 +367,10 @@ dependencies = [
  "criterion",
  "tailq",
 ]
+
+[[package]]
+name = "tailq-flip"
+version = "0.0.0"
 
 [[package]]
 name = "tinytemplate"

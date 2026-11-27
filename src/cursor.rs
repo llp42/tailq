@@ -552,9 +552,12 @@ impl<A: Adapter, C: Count> Iterator for IterPtr<'_, A, C> {
 
     #[inline]
     fn last(self) -> Option<Self::Item> {
-        // SAFETY: a node stays live while it is on the queue, and the
-        // iterator borrows the queue.
-        self.back.map(|at| unsafe { node_of::<A>(at) })
+        self.back.map(|at| {
+            Self::check_left(at);
+            // SAFETY: a node stays live while it is on the queue, and the
+            // iterator borrows the queue.
+            unsafe { node_of::<A>(at) }
+        })
     }
 }
 

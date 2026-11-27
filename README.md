@@ -123,7 +123,8 @@ Every problem a review found has a test: `tests/regressions.rs` names each one, 
 that debug builds catch, and `src/compile_fail.rs` what must not compile.
 
 The benches are in their own crate, `bench/`, so that criterion is no dependency of `tailq`: `cargo bench -p
-tailq-bench`.
+tailq-bench`. `testing/flip/` is a type macro whose answer changes from one expansion to the next, which the tests
+use to check that `adapter!` names each type once; it has no dependencies.
 
 CI also packages the crate, builds the library on Rust 1.99.0, the minimum, and lints the Markdown with
 markdownlint-cli2.

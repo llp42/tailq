@@ -65,3 +65,6 @@ jobs:
       # Every job time-limited, every test run built first and then run under limit.sh, clippy on release builds,
       # and coverage.py's filter and merge: what d7aa842 and f9f1d04 put in.
       - run: python3 -I .github/check_workflows.py
+      # Every test command on its own under limit.sh, and limit.sh still limiting memory and time: what
+      # check_workflows.py, reading whole lines, and nothing else checked.
+      - run: python3 -I .github/check_limits.py

@@ -397,22 +397,47 @@ macro_rules! __adapter {
         {
             type Node = $node;
 
+            // `$node` is pasted once, above: a type that is a macro call
+            // expands again at each paste, maybe to another type, so the
+            // checks name the node as `Self::Node`.
             const OFFSET: usize = {
-                let mut slot = $crate::__private::MaybeUninit::<$node>::uninit();
-                // By path and of a stated type: a method call could reach a
-                // trait method of the caller's instead.
-                let node: *mut $node =
-                    $crate::__private::MaybeUninit::<$node>::as_mut_ptr(&mut slot);
-                // A raw place, which is never deref-coerced: rejects a
-                // field that only derefs to a link.
-                // SAFETY: the place is a field of the slot, and nothing
-                // reads it.
+                // The field's place, through shared derefs only, on a slot
+                // nothing writes: it must lie where `offset_of!` says, which
+                // rejects a path that reaches the link through a deref.
+                let __tailq_slot = $crate::__private::MaybeUninit::<
+                    <Self as $crate::Adapter>::Node,
+                >::uninit();
+                // By path: a method call could reach a trait method of the
+                // caller's instead.
+                let __tailq_node = $crate::__private::MaybeUninit::<
+                    <Self as $crate::Adapter>::Node,
+                >::as_ptr(&__tailq_slot);
+                // SAFETY: the place is in the slot, and nothing reads it; a
+                // place elsewhere fails the evaluation.
+                let __tailq_at = unsafe {
+                    <*const _>::byte_offset_from(&raw const (*__tailq_node).$($field).+, __tailq_node)
+                };
+                // The field's type: a raw place, which is never
+                // deref-coerced, of an invariant pointer; on a slot of its
+                // own, so that a deref the path may take cannot change the
+                // slot above.
+                let mut __tailq_spare = $crate::__private::MaybeUninit::<
+                    <Self as $crate::Adapter>::Node,
+                >::uninit();
+                let __tailq_spare = $crate::__private::MaybeUninit::<
+                    <Self as $crate::Adapter>::Node,
+                >::as_mut_ptr(&mut __tailq_spare);
+                // SAFETY: as above.
                 let _: *mut $crate::Link =
-                    unsafe { &raw mut (*node).$($field).+ };
-                // Aligned in every node: rejects a packed node that could
-                // leave the link unaligned.
-                $crate::__private::link_offset::<$node>(
-                    $crate::__private::offset_of!($node, $($field).+),
+                    unsafe { &raw mut (*__tailq_spare).$($field).+ };
+                // Where the place lies, and aligned in every node: rejects
+                // a packed node that could leave the link unaligned.
+                $crate::__private::link_offset::<<Self as $crate::Adapter>::Node>(
+                    $crate::__private::offset_of!(
+                        <Self as $crate::Adapter>::Node,
+                        $($field).+
+                    ),
+                    __tailq_at,
                 )
             };
         }
@@ -466,28 +491,46 @@ macro_rules! __adapter {
         {
             type Payload = $payload_ty;
 
+            // As for the link, `$payload_ty` is pasted once, above, and
+            // `$node` only here, to check that it is the adapter's node.
             const PAYLOAD_OFFSET: usize = {
-                let mut slot = $crate::__private::MaybeUninit::<$node>::uninit();
-                // By path and of a stated type: a method call could reach a
-                // trait method of the caller's instead.
-                let node: *mut $node =
-                    $crate::__private::MaybeUninit::<$node>::as_mut_ptr(&mut slot);
-                // The adapter's own node.
-                let _: *mut <Self as $crate::Adapter>::Node = node;
-                // A raw place, which is never deref-coerced: proves the
-                // field's type.
-                // SAFETY: the place is a field of the slot, and nothing
-                // reads it.
-                let _: *mut $payload_ty =
-                    unsafe { &raw mut (*node).$($payload).+ };
+                let _: fn(*mut <Self as $crate::Adapter>::Node) -> *mut $node =
+                    |__tailq_node| __tailq_node;
                 // A reference to the field: rejects a path through a union,
                 // whose other fields could leave the payload invalid.
-                let _: for<'__tailq_node> fn(&'__tailq_node $node) -> &'__tailq_node $payload_ty =
-                    |node| &node.$($payload).+;
-                // Aligned in every node: rejects a packed field that could
-                // leave the payload unaligned.
-                $crate::__private::payload_offset::<$node, $payload_ty>(
-                    $crate::__private::offset_of!($node, $($payload).+),
+                let _: for<'__tailq_node> fn(
+                    &'__tailq_node <Self as $crate::Adapter>::Node,
+                ) -> &'__tailq_node <Self as $crate::Payload>::Payload =
+                    |__tailq_node| &__tailq_node.$($payload).+;
+                // The place and the type, as for the link.
+                let __tailq_slot = $crate::__private::MaybeUninit::<
+                    <Self as $crate::Adapter>::Node,
+                >::uninit();
+                let __tailq_node = $crate::__private::MaybeUninit::<
+                    <Self as $crate::Adapter>::Node,
+                >::as_ptr(&__tailq_slot);
+                // SAFETY: as for the link.
+                let __tailq_at = unsafe {
+                    <*const _>::byte_offset_from(&raw const (*__tailq_node).$($payload).+, __tailq_node)
+                };
+                let mut __tailq_spare = $crate::__private::MaybeUninit::<
+                    <Self as $crate::Adapter>::Node,
+                >::uninit();
+                let __tailq_spare = $crate::__private::MaybeUninit::<
+                    <Self as $crate::Adapter>::Node,
+                >::as_mut_ptr(&mut __tailq_spare);
+                // SAFETY: as for the link.
+                let _: *mut <Self as $crate::Payload>::Payload =
+                    unsafe { &raw mut (*__tailq_spare).$($payload).+ };
+                $crate::__private::payload_offset::<
+                    <Self as $crate::Adapter>::Node,
+                    <Self as $crate::Payload>::Payload,
+                >(
+                    $crate::__private::offset_of!(
+                        <Self as $crate::Adapter>::Node,
+                        $($payload).+
+                    ),
+                    __tailq_at,
                 )
             };
         }

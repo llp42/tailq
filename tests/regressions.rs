@@ -350,8 +350,8 @@ fn the_compile_time_checks_answer_at_run_time() {
     assert!(aligned::<Node, Link>(0));
     assert!(!aligned::<Node, Link>(1));
     assert!(!aligned::<u8, Link>(0));
-    assert_eq!(link_offset::<Node>(0), 0);
-    assert_eq!(payload_offset::<Node, u32>(16), 16);
+    assert_eq!(link_offset::<Node>(0, 0), 0);
+    assert_eq!(payload_offset::<Node, u32>(16, 16), 16);
     check_payload::<NodeLink>();
     let extra: u8 = 7;
     let wrapped = Wrapped {
@@ -372,7 +372,7 @@ fn an_overlapping_payload_fails_its_check() {
     expected = "tailq::adapter!: the link is not aligned in every node"
 )]
 fn an_unaligned_link_fails_its_check() {
-    assert_eq!(link_offset::<u8>(0), 0);
+    assert_eq!(link_offset::<u8>(0, 0), 0);
 }
 
 #[test]
@@ -380,7 +380,7 @@ fn an_unaligned_link_fails_its_check() {
     expected = "tailq::adapter!: the payload is not aligned in every node"
 )]
 fn an_unaligned_payload_fails_its_check() {
-    assert_eq!(payload_offset::<Node, u32>(1), 1);
+    assert_eq!(payload_offset::<Node, u32>(1, 1), 1);
 }
 
 /// Fills a queue reached by pointer, as a head in a `static mut` is, with
@@ -769,7 +769,7 @@ tailq::adapter!(TaggedLink = Tagged { link, mut key: u32 });
 /// Mutant L02: a payload needs its own alignment, not the link's.
 #[test]
 fn a_payload_needs_only_its_own_alignment() {
-    assert_eq!(payload_offset::<Tagged, u32>(20), 20);
+    assert_eq!(payload_offset::<Tagged, u32>(20, 20), 20);
     let mut node = Tagged {
         link: Link::new(),
         tag: 1,
@@ -866,5 +866,312 @@ fn a_walk_catches_a_node_it_had_not_handed_out_leaving() {
             assert_eq!(message, Some(expected), "{count} nodes, way {way}");
             head.clear();
         }
+    }
+}
+
+/// The fifth review found that, with nightly's enum paths in `offset_of!`
+/// and a const `DerefMut`, the raw place of a link reached through a
+/// deref named another type's link while `offset_of!` measured the node:
+/// the place must now lie where `offset_of!` says.
+#[test]
+#[should_panic(
+    expected = "tailq::adapter!: the path reaches the link through a deref"
+)]
+fn a_link_reached_through_a_deref_fails_its_check() {
+    assert_eq!(link_offset::<Node>(0, 8), 0);
+}
+
+#[test]
+#[should_panic(
+    expected = "tailq::adapter!: the path reaches the payload through a deref"
+)]
+fn a_payload_reached_through_a_deref_fails_its_check() {
+    assert_eq!(payload_offset::<Node, u32>(16, -8), 16);
+}
+
+// Review 5, mutation testing: each test below fails for a mutant no other
+// test noticed.  Append to tests/regressions.rs.
+
+/// Mutants I06 and I07: a walk over a head reached by pointer may move the
+/// node it has just handed out to another queue, which is what BSD's
+/// `TAILQ_FOREACH_SAFE` is for, from either end, through `fold` and
+/// `rfold` as well as `next` and `next_back`.  A removal alone cannot show
+/// a step that reads the link after it hands the node out: release builds
+/// leave a leaving link's forward word as it was.  A push onto another
+/// queue rewrites it.
+#[test]
+fn a_walk_by_pointer_may_move_what_it_hands_out_to_another_queue() {
+    let ways: [u8; 4] = [0, 1, 2, 3];
+    for way in ways {
+        let mut nodes = nodes::<5>();
+        let base = nodes.as_mut_ptr();
+        let mut head = Queue::new();
+        let mut other = Queue::new();
+        let mut seen = Vec::new();
+        // SAFETY: the nodes outlive both queues and are on no queue when
+        // pushed; the walk moves each node it hands out to `other`, which
+        // is not the queue it walks, right after it hands it out, and no
+        // reference to either queue is alive meanwhile.
+        unsafe {
+            let queue = by_pointer::<4>(&mut head, base);
+            let others = ptr::from_mut(&mut other).cast::<Queue<'static>>();
+            (*others).push_back_ptr(NonNull::new_unchecked(base.add(4)));
+            let mut move_out = |node: NonNull<Node>| {
+                let key = (*node.as_ptr()).key;
+                // A walk that read a link after handing its node out would
+                // follow it onto `other`, and then around it for ever.
+                assert!(key <= 4, "the walk left its queue for another");
+                seen.push(key);
+                (*queue).remove_ptr(node);
+                (*others).push_front_ptr(node);
+            };
+            match way {
+                0 => (*queue).iter_ptr().for_each(&mut move_out),
+                1 => (*queue).iter_ptr().rev().for_each(&mut move_out),
+                2 => {
+                    for node in (*queue).iter_ptr() {
+                        move_out(node);
+                    }
+                }
+                _ => {
+                    for node in (*queue).iter_ptr().rev() {
+                        move_out(node);
+                    }
+                }
+            }
+            assert!((*queue).is_empty(), "every node moved");
+        }
+        let (walked, moved): ([u32; 4], [u32; 5]) = if way.is_multiple_of(2) {
+            ([1, 2, 3, 4], [4, 3, 2, 1, 5])
+        } else {
+            ([4, 3, 2, 1], [1, 2, 3, 4, 5])
+        };
+        assert_eq!((seen, keys(&other)), (walked.to_vec(), moved.to_vec()));
+    }
+}
+
+/// Mutants I14 and I15: an iterator answers `last` from its back end, and a
+/// counted one `count` from its count, in O(1), as e54b390 and 6a21a14
+/// promise; the default methods walk every node to the end.  A queue of
+/// 16384 nodes takes them no longer than one of two, with fifty times the
+/// slack.
+#[cfg_attr(miri, ignore = "times a walk")]
+#[test]
+fn last_and_a_counted_count_take_constant_time() {
+    use core::hint::black_box;
+    use core::iter::repeat_with;
+    use core::time::Duration;
+    use std::time::Instant;
+
+    const NODES: usize = 1 << 14;
+    const CALLS: usize = 1 << 10;
+
+    /// Times `last` and `count` on every iterator of `queue`, best of three.
+    fn time(queue: &mut CountedQueue<'_>) -> Duration {
+        let trials: u32 = 3;
+        let mut best = Duration::MAX;
+        for _ in 0..trials {
+            let start = Instant::now();
+            for _ in 0..CALLS {
+                let _: Option<&Node> =
+                    black_box(black_box(queue.iter()).last());
+                let _: Option<NonNull<Node>> =
+                    black_box(black_box(queue.iter_ptr()).last());
+                let _: usize = black_box(black_box(queue.iter()).count());
+                let _: usize = black_box(black_box(queue.iter_ptr()).count());
+                let _: usize = black_box(black_box(queue.iter_mut()).count());
+                let _: Option<&mut u32> =
+                    black_box(black_box(queue.iter_mut()).last());
+            }
+            best = best.min(start.elapsed());
+        }
+        best
+    }
+
+    let mut long: Vec<Node> = repeat_with(|| Node {
+        link: Link::new(),
+        key: 0,
+    })
+    .take(NODES)
+    .collect();
+    let mut short = nodes::<2>();
+    let mut long_queue: CountedQueue<'_> = long.iter_mut().collect();
+    let mut short_queue: CountedQueue<'_> = short.iter_mut().collect();
+    let (long_time, short_time) =
+        (time(&mut long_queue), time(&mut short_queue));
+    let slack = Duration::from_millis(2);
+    assert!(
+        long_time < short_time * 50 + slack,
+        "{NODES} nodes {long_time:?}, two {short_time:?}"
+    );
+}
+
+// Review 5, requirement audit: the performance problem the fourth round's
+// review found had no test.  Append to tests/regressions.rs.
+
+/// The fourth round's performance review, fixed in f3ac729: at sixteen
+/// nodes the third and fourth rounds' steps made `rfold` up to half again
+/// as slow, and `find` from the back slower still, than the same walks
+/// from the front.  At 7095186 `rfold` took 1.7 times as long as `fold`
+/// here, and `find` from the back 1.3 times as long as from the front,
+/// against 1.05 and 0.95 at f3ac729.  Optimised builds only, best of
+/// fifteen trials, each walk timed beside the others.
+#[cfg(not(debug_assertions))]
+#[cfg_attr(miri, ignore = "times a walk")]
+#[test]
+fn backward_walks_cost_what_forward_ones_do() {
+    use core::hint::black_box;
+    use core::time::Duration;
+    use std::time::Instant;
+
+    const WALKS: usize = 1 << 14;
+    const TRIALS: usize = 15;
+
+    /// Times `WALKS` runs of `walk`.
+    fn time<F>(walk: F) -> Duration
+    where
+        F: Fn() -> u32,
+    {
+        let start = Instant::now();
+        for _ in 0..WALKS {
+            let _: u32 = black_box(walk());
+        }
+        start.elapsed()
+    }
+
+    let mut nodes = nodes::<16>();
+    let queue: Queue<'_> = nodes.iter_mut().collect();
+    let (first, last) = (queue.front_ptr(), queue.back_ptr());
+    let none: u32 = 0;
+    let fold = || {
+        black_box(&queue)
+            .iter()
+            .fold(none, |keys, node| keys ^ node.key)
+    };
+    let rfold = || {
+        black_box(&queue)
+            .iter()
+            .rfold(none, |keys, node| keys ^ node.key)
+    };
+    let find = || {
+        let found = black_box(&queue)
+            .iter_ptr()
+            .find(|node| Some(*node) == black_box(last));
+        u32::from(found.is_some())
+    };
+    let find_back = || {
+        let found = black_box(&queue)
+            .iter_ptr()
+            .rev()
+            .find(|node| Some(*node) == black_box(first));
+        u32::from(found.is_some())
+    };
+    let mut best = [Duration::MAX; 4];
+    for _ in 0..TRIALS {
+        let took = [time(fold), time(rfold), time(find), time(find_back)];
+        for (fastest, this) in best.iter_mut().zip(took) {
+            *fastest = (*fastest).min(this);
+        }
+    }
+    let [fold_time, rfold_time, find_time, find_back_time] = best;
+    assert!(
+        rfold_time * 20 < fold_time * 27 && find_back_time * 5 < find_time * 6,
+        "fold {fold_time:?}, rfold {rfold_time:?}, find {find_time:?}, \
+         find from the back {find_back_time:?}"
+    );
+}
+
+// Review 5: fails to compile until the expansion's locals are renamed (see
+// fix_names.diff).  Append to tests/regressions.rs.
+
+/// The locals of the expansion, `slot` and `node`, met a constant or a unit
+/// struct of the caller's of those names, which a `let` or a closure's
+/// parameter cannot shadow, as the fourth review's `'node` and `Headers`
+/// did: `adapter!` failed to compile beside them.  They are named so that
+/// no caller's name meets them now.
+#[test]
+#[expect(
+    non_upper_case_globals,
+    non_camel_case_types,
+    reason = "the names the expansion's locals had"
+)]
+fn adapters_meet_no_constant_or_unit_struct_of_the_callers() {
+    const node: u32 = 7;
+    struct slot;
+
+    struct Keyed {
+        link: Link,
+        key: u32,
+    }
+
+    tailq::adapter!(KeyedLink = Keyed { link, mut key: u32 });
+
+    let mut one = Keyed {
+        link: Link::new(),
+        key: node,
+    };
+    let mut queue = TailQueue::<'_, KeyedLink>::new();
+    queue.push_back(&mut one);
+    if let Some(key) = queue.front_mut() {
+        *key = key.wrapping_add(1);
+    }
+    assert_eq!(size_of::<slot>(), 0);
+    assert_eq!(queue.front().map(|front| front.key), Some(8));
+}
+
+/// The same for a const parameter named `slot`.
+#[test]
+#[expect(
+    non_upper_case_globals,
+    reason = "the name a local of the expansion had"
+)]
+fn adapters_meet_no_const_parameter_of_the_callers() {
+    struct Slotted<const slot: usize> {
+        link: Link,
+        keys: [u32; slot],
+    }
+
+    tailq::adapter!(
+        SlottedLink<const slot: usize> = Slotted<slot> {
+            link,
+            mut keys: [u32; slot],
+        }
+    );
+
+    let mut one = Slotted {
+        link: Link::new(),
+        keys: [1, 2],
+    };
+    let mut queue = TailQueue::<'_, SlottedLink<2>>::new();
+    queue.push_back(&mut one);
+    if let Some(keys) = queue.front_mut() {
+        keys.reverse();
+    }
+    assert_eq!(queue.front().map(|front| front.keys), Some([2, 1]));
+}
+
+/// f3ac729 says that before a walk hands a node out it checks, in debug
+/// builds, that the node is still on the queue, but `last` handed out the
+/// walk's back node unchecked, one of the ways 7095186 named of handing out
+/// a node that had left.  Fails until `last` checks it (see
+/// `fix_last.diff`).
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(
+    expected = "tail queue: a node the walk had not handed out left the queue"
+)]
+fn last_catches_the_back_node_leaving() {
+    let mut nodes = nodes::<3>();
+    let base = nodes.as_mut_ptr();
+    let mut head = Queue::new();
+    // SAFETY: the nodes outlive the queue and are on no queue; removing the
+    // walk's back node, which it has not handed out, is the misuse under
+    // test, and no reference to the queue is alive meanwhile.
+    unsafe {
+        let queue = by_pointer::<3>(&mut head, base);
+        let mut walk = (*queue).iter_ptr();
+        assert!(walk.next().is_some(), "three nodes");
+        (*queue).remove_ptr(NonNull::new_unchecked(base.add(2)));
+        let _: Option<NonNull<Node>> = walk.last();
     }
 }

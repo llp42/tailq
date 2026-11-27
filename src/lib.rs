@@ -277,8 +277,16 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// Empties the queue in O(n), marking every node's link as on no
     /// queue.  The nodes pushed as `&'nodes mut` stay borrowed until
     /// `'nodes` ends.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when a link on the queue is not consistent with its
+    /// neighbours: the queue is corrupt, and the walk could lead into
+    /// another queue.
     #[inline]
     pub fn clear(&mut self) {
+        #[cfg(debug_assertions)]
+        assert!(self.links_hold(), "tail queue: the queue is corrupt");
         self.release_all();
     }
 
@@ -363,9 +371,9 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// # Safety
     ///
-    /// `node` must be on this queue, aligned, and valid for reads of its
-    /// link.  The cursor then reaches the node through the pointer it was
-    /// pushed with, not through `node`.
+    /// `node` must be on this queue, and derived from the pointer it was
+    /// pushed with, as the pointers the queue returns are.  The cursor then
+    /// reaches the node through the pointer it was pushed with itself.
     #[must_use]
     #[inline]
     pub unsafe fn cursor_from_ptr(
@@ -405,9 +413,9 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// # Safety
     ///
-    /// `node` must be on this queue, aligned, and valid for reads of its
-    /// link.  The cursor then reaches the node through the pointer it was
-    /// pushed with, not through `node`.
+    /// `node` must be on this queue, and derived from the pointer it was
+    /// pushed with, as the pointers the queue returns are.  The cursor then
+    /// reaches the node through the pointer it was pushed with itself.
     #[must_use]
     #[inline]
     pub unsafe fn cursor_mut_from_ptr(
@@ -457,7 +465,12 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// queue, and it must be valid for reads and writes of the whole node.  Until the
     /// node leaves the queue:
     ///
-    /// - it must stay live and unmoved;
+    /// - it must stay live and unmoved, and `node` must stay valid for it:
+    ///   the node may be reached only through `node` and pointers derived
+    ///   from it, such as those the queue returns or ones taken from the
+    ///   references it hands out, never through what `node` was made
+    ///   from, and a node on several queues is pushed onto each with the
+    ///   same pointer;
     /// - nothing but the queue may write its link, and no read of the
     ///   link through another reference, as [`Link::is_linked`] makes,
     ///   may race with the queue's writes;
@@ -638,9 +651,8 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// # Safety
     ///
-    /// `node` must be on this queue, aligned, and valid for reads and
-    /// writes of its link, as the pointer it was pushed with, or one the
-    /// queue returned, is.
+    /// `node` must be on this queue, and derived from the pointer it was
+    /// pushed with, as the pointers the queue returns are.
     #[inline]
     pub unsafe fn remove_ptr(&mut self, node: NonNull<A::Node>) {
         // SAFETY: the caller puts the node on this queue.
@@ -811,6 +823,11 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
                     );
                     break;
                 };
+                // A link that left a queue: its forward word is `NOWHERE`.
+                assert!(
+                    next.as_ptr() != NOWHERE.as_ptr(),
+                    "tail queue: the link is on no queue",
+                );
                 ahead = next;
             }
         }
@@ -1046,6 +1063,34 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         release(old);
     }
 
+    /// Returns, in debug builds, whether every link from the first is
+    /// consistent with its neighbours and the last is this queue's, without
+    /// panicking.
+    #[cfg(debug_assertions)]
+    fn links_hold(&self) -> bool {
+        let mut before = NOWHERE;
+        let mut at = self.first;
+        while let Some(link) = at {
+            // SAFETY: a node stays live while it is on the queue, and the
+            // walk stops at the first link that does not hold.
+            let (prev, next) = unsafe { (prev_of(link), next_of(link)) };
+            if !is(prev, before) {
+                return false;
+            }
+            match next {
+                None => return is(self.last, link),
+                // A link that left a queue: its forward word is `NOWHERE`.
+                Some(after) if after.as_ptr() == NOWHERE.as_ptr() => {
+                    return false;
+                }
+                Some(_) => {}
+            }
+            before = link;
+            at = next;
+        }
+        self.last.is_none()
+    }
+
     /// Marks every node's link as on no queue and empties the queue.
     #[inline]
     fn release_all(&mut self) {
@@ -1147,8 +1192,16 @@ impl<'nodes, A: Adapter, C: Count> FromIterator<&'nodes mut A::Node>
 
 impl<A: Adapter, C: Count> Drop for TailQueue<'_, A, C> {
     /// Marks the links of the nodes still on the queue as on no queue.
+    ///
+    /// Debug builds first check that every link is consistent with its
+    /// neighbours, and write nothing if one is not: a corrupt queue could
+    /// lead into another, and a panic here would abort while unwinding.
     #[inline]
     fn drop(&mut self) {
+        #[cfg(debug_assertions)]
+        if !self.links_hold() {
+            return;
+        }
         self.release_all();
     }
 }
