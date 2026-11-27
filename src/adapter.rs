@@ -440,7 +440,11 @@ macro_rules! __adapter {
         // group among them fails to parse, rather than closing a header
         // below and taking the place of its body.
         $(#[doc $($doc)*])*
-        #[derive(Clone, Copy, Debug)]
+        #[$crate::__private::derive(
+            $crate::__private::Clone,
+            $crate::__private::Copy,
+            $crate::__private::Debug
+        )]
         $vis struct $name<$($decl)*>(
             $crate::__private::Infallible,
             $crate::__private::PhantomData<fn() -> $node>,

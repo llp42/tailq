@@ -8,9 +8,12 @@ pub use crate::adapter::check_payload;
 // What the expansion of `adapter!` names from `core`, named through
 // `$crate`: a path `::core::...` would resolve in the caller's crate,
 // which can put a crate of its own under that name.
+pub use core::clone::Clone;
 pub use core::convert::Infallible;
-pub use core::marker::{PhantomData, Sized};
+pub use core::fmt::Debug;
+pub use core::marker::{Copy, PhantomData, Sized};
 pub use core::mem::{MaybeUninit, offset_of};
+pub use core::prelude::v1::derive;
 pub use core::primitive::usize;
 
 use crate::Link;
