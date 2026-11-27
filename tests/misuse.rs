@@ -333,11 +333,8 @@ fn a_caught_membership_check_leaves_both_queues_as_they_were() {
     );
 }
 
-// Review 3, mutation testing: each test below fails when one debug check is
-// left out, which no other test noticed.
-
-/// Mutant M01: the membership walk reaches the far end of another queue's
-/// back half first, and must check that end too.
+/// The membership walk reaches the far end of another queue's back half
+/// first, and checks that end too.
 #[test]
 #[should_panic(expected = "tail queue: the link is not on this queue")]
 fn no_cursor_rests_on_a_node_near_the_back_of_another_queue() {
@@ -372,7 +369,7 @@ fn stale_copy(nodes: &Nodes) -> (Queue, ManuallyDrop<Queue>) {
     (queue, copy)
 }
 
-/// Mutant M04: a link with no next is the last of the queue that pops it.
+/// A link with no next is the last of the queue that pops it.
 #[test]
 #[should_panic(expected = "tail queue: the link is not on this queue")]
 fn a_stale_head_does_not_pop_a_node_that_became_last() {
@@ -383,8 +380,7 @@ fn a_stale_head_does_not_pop_a_node_that_became_last() {
     assert!(stale.pop_front_ptr().is_none(), "unreachable");
 }
 
-/// Mutant M05: a link with no previous link is the first of the queue
-/// that pops it.
+/// A link with no previous link is the first of the queue that pops it.
 #[test]
 #[should_panic(expected = "tail queue: the link is not on this queue")]
 fn a_stale_head_does_not_pop_a_node_that_became_first() {
@@ -394,8 +390,8 @@ fn a_stale_head_does_not_pop_a_node_that_became_first() {
     assert!(stale.pop_back_ptr().is_none(), "unreachable");
 }
 
-/// Mutant M06: a head in a `ManuallyDrop` leaves its nodes marked as
-/// linked, and safe code then pushing one at the back is caught.
+/// A head in a `ManuallyDrop` leaves its nodes marked as linked, and safe
+/// code then pushing one at the back is caught.
 #[test]
 #[should_panic(expected = "tail queue: the link is already on a queue")]
 fn a_node_a_forgotten_head_left_linked_cannot_be_pushed_at_the_back() {
@@ -411,7 +407,7 @@ fn a_node_a_forgotten_head_left_linked_cannot_be_pushed_at_the_back() {
     queue.push_back(&mut node);
 }
 
-/// Mutant M07: linking before a node checks the new link too.
+/// Linking before a node checks the new link too.
 #[test]
 #[should_panic(expected = "tail queue: the link is already on a queue")]
 fn a_linked_node_cannot_be_inserted_before() {
@@ -445,7 +441,7 @@ fn overwritten_last(nodes: &Nodes) -> (Queue, Queue) {
     (queue, other)
 }
 
-/// Mutant M08: linking after a node checks that node first.
+/// Linking after a node checks that node first.
 #[test]
 #[should_panic(
     expected = "tail queue: the previous link does not point at this one"
@@ -457,8 +453,8 @@ fn no_node_is_linked_after_an_overwritten_node() {
     unsafe { queue.cursor_back_mut().insert_after_ptr(nodes.at(4)) };
 }
 
-/// Mutant M09: linking before a node checks that node first; without it
-/// the new node is linked into `other`.
+/// Linking before a node checks that node first; without it the new node
+/// would be linked into `other`.
 #[test]
 #[should_panic(
     expected = "tail queue: the previous link does not point at this one"
@@ -470,7 +466,7 @@ fn no_node_is_linked_before_an_overwritten_node() {
     unsafe { queue.cursor_back_mut().insert_before_ptr(nodes.at(4)) };
 }
 
-/// Mutant M10: replacing a node checks it first.
+/// Replacing a node checks it first.
 #[test]
 #[should_panic(
     expected = "tail queue: the previous link does not point at this one"
@@ -484,8 +480,8 @@ fn an_overwritten_node_is_not_replaced() {
     assert!(replaced.is_none(), "unreachable");
 }
 
-/// Mutant M11: popping the front checks the first node.  The queue's walk
-/// would enter `other` through the copy, so it is never dropped.
+/// Popping the front checks the first node.  The queue's walk would enter
+/// `other` through the copy, so it is never dropped.
 #[test]
 #[should_panic(expected = "tail queue: the next link does not point back")]
 fn a_first_node_overwritten_by_another_is_not_popped() {
@@ -506,8 +502,8 @@ fn a_first_node_overwritten_by_another_is_not_popped() {
     assert!(queue.pop_front_ptr().is_none(), "unreachable");
 }
 
-/// Review 4: a push at the back checks the last node before it writes its
-/// link, as linking after it through a cursor does.
+/// A push at the back checks the last node before it writes its link, as
+/// linking after it through a cursor does.
 #[test]
 #[should_panic(
     expected = "tail queue: the previous link does not point at this one"
@@ -519,8 +515,8 @@ fn no_node_is_pushed_after_an_overwritten_last_node() {
     unsafe { queue.push_back_ptr(nodes.at(4)) };
 }
 
-/// Review 4: an append checks the last node of this queue before it
-/// writes its link.
+/// An append checks the last node of this queue before it writes its
+/// link.
 #[test]
 #[should_panic(
     expected = "tail queue: the previous link does not point at this one"
@@ -553,8 +549,7 @@ fn overwritten_first(nodes: &Nodes) -> (ManuallyDrop<Queue>, Queue) {
     (queue, other)
 }
 
-/// Review 4: a push at the front checks the first node before it writes
-/// its link.
+/// A push at the front checks the first node before it writes its link.
 #[test]
 #[should_panic(expected = "tail queue: the next link does not point back")]
 fn no_node_is_pushed_before_an_overwritten_first_node() {
@@ -564,8 +559,8 @@ fn no_node_is_pushed_before_an_overwritten_first_node() {
     unsafe { queue.push_front_ptr(nodes.at(4)) };
 }
 
-/// Review 4: an append checks the first node of the queue it takes before
-/// it writes its link.
+/// An append checks the first node of the queue it takes before it writes
+/// its link.
 #[test]
 #[should_panic(expected = "tail queue: the next link does not point back")]
 fn no_queue_is_appended_with_an_overwritten_first_node() {
@@ -575,11 +570,8 @@ fn no_queue_is_appended_with_an_overwritten_first_node() {
     queue.append(&mut donor);
 }
 
-// Review 4, mutation testing: each test below fails for a mutant of a debug
-// check that no other test noticed.
-
-/// Mutant C01: a stale head that pops a node which already left is caught
-/// before the check reads the leaving link's poisoned forward word.
+/// A stale head that pops a node which already left is caught before the
+/// check reads the leaving link's poisoned forward word.
 #[test]
 #[should_panic(expected = "tail queue: the link is on no queue")]
 fn a_stale_head_does_not_pop_a_node_that_already_left() {
@@ -589,9 +581,9 @@ fn a_stale_head_does_not_pop_a_node_that_already_left() {
     assert!(stale.pop_front_ptr().is_none(), "unreachable");
 }
 
-/// Review 5: clearing a queue checks every link before it writes any, so
-/// a corrupt queue does not walk into another.  Here the first node of
-/// `queue` holds the bytes of the first of `other`.
+/// Clearing a queue checks every link before it writes any, so a corrupt
+/// queue does not walk into another.  Here the first node of `queue` holds
+/// the bytes of the first of `other`.
 #[test]
 #[should_panic(expected = "tail queue: the queue is corrupt")]
 fn a_corrupt_queue_is_not_cleared() {
@@ -600,9 +592,9 @@ fn a_corrupt_queue_is_not_cleared() {
     queue.clear();
 }
 
-/// Review 5: clearing checks a link's forward word too.  Here the last of
-/// two nodes keeps its `prev` but has the forward word of a link that left
-/// a queue, `usize::MAX`, as if it had been half relinked.
+/// Clearing checks a link's forward word too.  Here the last of two nodes
+/// keeps its `prev` but has the forward word of a link that left a queue,
+/// `usize::MAX`, as if it had been half relinked.
 #[test]
 #[should_panic(expected = "tail queue: the queue is corrupt")]
 fn a_queue_with_a_half_relinked_node_is_not_cleared() {
@@ -639,8 +631,8 @@ unsafe fn half_relinked(nodes: &Nodes, queue: &mut Queue) {
     }
 }
 
-/// Review 6: the end checks of a pop, a push and the like refuse a forward
-/// word that marks a link as on no queue, rather than read through it.
+/// The end checks of a pop, a push and the like refuse a forward word that
+/// marks a link as on no queue, rather than read through it.
 #[test]
 #[should_panic(expected = "tail queue: the link is on no queue")]
 fn a_pop_refuses_a_half_relinked_last_node() {
@@ -654,7 +646,7 @@ fn a_pop_refuses_a_half_relinked_last_node() {
     }
 }
 
-/// Review 6: as above, through a push after the last node.
+/// As above, through a push after the last node.
 #[test]
 #[should_panic(expected = "tail queue: the link is on no queue")]
 fn a_push_refuses_a_half_relinked_last_node() {
@@ -667,10 +659,10 @@ fn a_push_refuses_a_half_relinked_last_node() {
     }
 }
 
-/// Review 6: a copy of a middle link passed the membership walk, which
-/// reached the ends through its neighbours, while the queue still links
-/// the original; no cursor rests on it, as no removal takes it.  Since
-/// review 8 the walk meets only the queue's own links, and not the copy.
+/// A copy of a middle link reaches the queue's ends through its
+/// neighbours, while the queue still links the original, so the
+/// membership walk meets only the queue's own links, and not the copy: no
+/// cursor rests on it, as no removal takes it.
 #[test]
 #[should_panic(expected = "tail queue: the link is not on this queue")]
 fn no_cursor_rests_on_a_moved_node() {
@@ -682,7 +674,7 @@ fn no_cursor_rests_on_a_moved_node() {
     assert!(cursor.current().is_some(), "unreachable");
 }
 
-/// Review 6: as above, with a cursor that could write the queue.
+/// As above, with a cursor that could write the queue.
 #[test]
 #[should_panic(expected = "tail queue: the link is not on this queue")]
 fn no_mutable_cursor_rests_on_a_moved_node() {
@@ -693,8 +685,8 @@ fn no_mutable_cursor_rests_on_a_moved_node() {
     assert!(cursor.remove_current_ptr().is_some(), "unreachable");
 }
 
-/// Review 6: a replacement checks its node at the ghost too, as its Panics
-/// section says, though it links nothing there.
+/// A replacement checks its node at the ghost too, as its Panics section
+/// says, though it links nothing there.
 #[test]
 #[should_panic(expected = "tail queue: the link is already on a queue")]
 fn a_replacement_at_the_ghost_checks_its_node() {
@@ -715,8 +707,8 @@ fn a_replacement_at_the_ghost_checks_its_node() {
     }
 }
 
-/// Review 6: as above, in safe code, for a node that a forgotten queue
-/// left marked as on a queue.
+/// As above, in safe code, for a node that a forgotten queue left marked
+/// as on a queue.
 #[test]
 #[should_panic(expected = "tail queue: the link is already on a queue")]
 fn a_safe_replacement_at_the_ghost_checks_its_node() {
@@ -737,9 +729,6 @@ fn a_safe_replacement_at_the_ghost_checks_its_node() {
     cursor.move_next();
     assert!(cursor.replace_current(&mut stray).is_err(), "the ghost");
 }
-
-// Review 6, mutation testing: each test below fails for a mutant of clear's
-// and drop's check that no other test noticed.
 
 /// Pushes the first two nodes onto a queue, then, through a stale copy of
 /// its head, the third: after the last when `after`, before the first
@@ -762,9 +751,9 @@ fn pushed_through_a_stale_head(nodes: &Nodes, after: bool) -> Queue {
     queue
 }
 
-/// Mutant L04: clearing checks that the walk from the first link ends at
-/// the queue's last.  Here it runs on past the last into a node the stale
-/// head pushed, whose link points back as it should.
+/// Clearing checks that the walk from the first link ends at the queue's
+/// last.  Here it runs on past the last into a node the stale head pushed,
+/// whose link points back as it should.
 #[test]
 #[should_panic(expected = "tail queue: the queue is corrupt")]
 fn a_queue_whose_walk_runs_past_its_last_is_not_cleared() {
@@ -773,9 +762,9 @@ fn a_queue_whose_walk_runs_past_its_last_is_not_cleared() {
     queue.clear();
 }
 
-/// Mutant L03: clearing checks that every link points back at the one
-/// before it.  Here the first node's points at the node the stale head
-/// pushed before it, while the walk forward still ends at the last.
+/// Clearing checks that every link points back at the one before it.  Here
+/// the first node's points at the node the stale head pushed before it,
+/// while the walk forward still ends at the last.
 #[test]
 #[should_panic(expected = "tail queue: the queue is corrupt")]
 fn a_queue_whose_first_points_back_at_another_node_is_not_cleared() {
@@ -784,8 +773,8 @@ fn a_queue_whose_first_points_back_at_another_node_is_not_cleared() {
     queue.clear();
 }
 
-/// Mutant L06: a head with no first link but a last one is corrupt too, as
-/// one whose first word was overwritten is, and is not cleared.
+/// A head with no first link but a last one is corrupt too, as one whose
+/// first word was overwritten is, and is not cleared.
 #[test]
 #[should_panic(expected = "tail queue: the queue is corrupt")]
 fn a_head_with_a_last_but_no_first_is_not_cleared() {
@@ -801,9 +790,10 @@ fn a_head_with_a_last_but_no_first_is_not_cleared() {
     queue.clear();
 }
 
-/// Review 7: the end checks ran one way only, from a link that says it is
-/// at an end to the head.  A stale head whose last has gained a successor
-/// pushed after it, cutting off the queue's later nodes.
+/// The end checks run both ways: a link that says it is at an end must be
+/// the head's, and the link the head names as an end must have no
+/// neighbour past it.  Otherwise a stale head whose last has gained a
+/// successor would push after it, cutting off the queue's later nodes.
 #[test]
 #[should_panic(expected = "tail queue: the head's end has a neighbour")]
 fn a_stale_head_does_not_push_after_a_last_that_has_a_successor() {
@@ -818,8 +808,8 @@ fn a_stale_head_does_not_push_after_a_last_that_has_a_successor() {
     }
 }
 
-/// Review 7: as above, through a pop from a stale head whose first has
-/// gained a predecessor.
+/// As above, through a pop from a stale head whose first has gained a
+/// predecessor.
 #[test]
 #[should_panic(expected = "tail queue: the head's end has a neighbour")]
 fn a_stale_head_does_not_pop_a_first_that_has_a_predecessor() {
@@ -832,8 +822,8 @@ fn a_stale_head_does_not_pop_a_first_that_has_a_predecessor() {
     }
 }
 
-/// Review 7: as above, for each end of a stale head, through a push at the
-/// front and a pop at the back.
+/// As above, for each end of a stale head, through a push at the front and
+/// a pop at the back.
 #[test]
 fn a_stale_head_is_caught_at_either_end() {
     for front in [true, false] {
@@ -855,7 +845,7 @@ fn a_stale_head_is_caught_at_either_end() {
     }
 }
 
-/// Review 7: as above, through an append onto a stale head.
+/// As above, through an append onto a stale head.
 #[test]
 #[should_panic(expected = "tail queue: the head's end has a neighbour")]
 fn a_stale_head_takes_no_append() {
@@ -869,9 +859,6 @@ fn a_stale_head_takes_no_append() {
         stale.append(&mut other);
     }
 }
-
-// Review 7, mutation testing: each test below fails for a mutant of clear's
-// and drop's check that no other test noticed.
 
 /// Pushes the one node onto a queue and zeroes the head's last link, to
 /// `None`, keeping its first.
@@ -890,9 +877,9 @@ unsafe fn first_but_no_last(nodes: &Nodes) -> Queue {
     queue
 }
 
-/// Mutant W5: a head with a first link but no last is corrupt, as one with
-/// a last but no first is, and is not cleared: the walk from its first
-/// must end at its last, which `None` is not.
+/// A head with a first link but no last is corrupt, as one with a last but
+/// no first is, and is not cleared: the walk from its first must end at
+/// its last, which `None` is not.
 #[test]
 #[should_panic(expected = "tail queue: the queue is corrupt")]
 fn a_head_with_a_first_but_no_last_is_not_cleared() {
@@ -902,9 +889,9 @@ fn a_head_with_a_first_but_no_last_is_not_cleared() {
     queue.clear();
 }
 
-/// Review 8: an append checked the other queue's first only, so a stale
-/// head whose last had gained a successor gave this queue a last with a
-/// neighbour.
+/// An append checks the other queue's last as well as its first, so a
+/// stale head whose last has gained a successor does not give this queue
+/// a last with a neighbour.
 #[test]
 #[should_panic(expected = "tail queue: the head's end has a neighbour")]
 fn an_append_checks_the_other_queues_last() {
@@ -920,9 +907,9 @@ fn an_append_checks_the_other_queues_last() {
     }
 }
 
-/// Review 8: an append onto itself, through a copy of its head, made a ring
-/// of the queue, which the membership walk and `contains_ptr` then never
-/// left.
+/// An append onto itself, through a copy of its head, is refused: it
+/// would make a ring of the queue, which the membership walk and
+/// `contains_ptr` would never leave.
 #[test]
 #[should_panic(expected = "tail queue: the queue is appended to itself")]
 fn a_queue_is_not_appended_to_itself() {
@@ -931,9 +918,9 @@ fn a_queue_is_not_appended_to_itself() {
     queue.append(&mut copy);
 }
 
-/// Review 8: the membership walk meets its node from the back when the
-/// links forward skip it, and the cursor then refuses the node, which the
-/// link before it does not point at.
+/// The membership walk meets its node from the back when the links forward
+/// skip it, and the cursor then refuses the node, which the link before it
+/// does not point at.
 #[test]
 #[should_panic(
     expected = "tail queue: the previous link does not point at this one"
@@ -955,9 +942,6 @@ fn no_cursor_rests_on_a_node_the_links_forward_skip() {
     }
 }
 
-// Review 8, mutation testing: each test below fails for a mutant of the end
-// check that no other test noticed.
-
 /// Pushes the first two nodes onto a queue and zeroes the link of the one
 /// at `i` in place, as a memset of the node would.
 ///
@@ -975,9 +959,9 @@ unsafe fn zeroed_at(nodes: &Nodes, i: usize) -> Queue {
     queue
 }
 
-/// Mutant CK1: a link whose `prev` is `None`, here the first of two, zeroed
-/// in place, is on no queue, and the end check says so before it holds the
-/// link's missing next to the head's last.
+/// A link whose `prev` is `None`, here the first of two, zeroed in place,
+/// is on no queue, and the end check says so before it holds the link's
+/// missing next to the head's last.
 #[test]
 #[should_panic(expected = "tail queue: the link is on no queue")]
 fn a_zeroed_first_link_is_not_popped() {
@@ -987,8 +971,8 @@ fn a_zeroed_first_link_is_not_popped() {
     assert!(queue.pop_front_ptr().is_some(), "unreachable");
 }
 
-/// Mutant CK1: as above, for the last of two, whose `None` the end check
-/// would otherwise take for the previous link and read at address zero.
+/// As above, for the last of two, whose `None` the end check would
+/// otherwise take for the previous link and read at address zero.
 #[test]
 #[should_panic(expected = "tail queue: the link is on no queue")]
 fn a_zeroed_last_link_is_not_popped() {
@@ -998,9 +982,9 @@ fn a_zeroed_last_link_is_not_popped() {
     assert!(queue.pop_back_ptr().is_some(), "unreachable");
 }
 
-/// Mutant CK9: a link with no next is at the back of a queue only when the
-/// head names it as its last, which a head with a first but no last does
-/// not, so such a head pops nothing.
+/// A link with no next is at the back of a queue only when the head names
+/// it as its last, which a head with a first but no last does not, so such
+/// a head pops nothing.
 #[test]
 #[should_panic(expected = "tail queue: the link is not on this queue")]
 fn a_head_with_a_first_but_no_last_pops_nothing() {
@@ -1010,9 +994,9 @@ fn a_head_with_a_first_but_no_last_pops_nothing() {
     assert!(queue.pop_front_ptr().is_some(), "unreachable");
 }
 
-/// Mutant CK10: as above, a link whose `prev` marks it as first is at the
-/// front of a queue only when the head names it as its first, which a head
-/// with a last but no first does not.
+/// As above, a link whose `prev` marks it as first is at the front of a
+/// queue only when the head names it as its first, which a head with a
+/// last but no first does not.
 #[test]
 #[should_panic(expected = "tail queue: the link is not on this queue")]
 fn a_head_with_a_last_but_no_first_pops_nothing() {
@@ -1028,9 +1012,10 @@ fn a_head_with_a_last_but_no_first_pops_nothing() {
     assert!(queue.pop_back_ptr().is_some(), "unreachable");
 }
 
-/// Review 9: an append refused a copy of its own head by its first only, so
-/// a stale copy whose first had since left took a copy of the live head,
-/// the same chain from its second node, and made a ring of it.
+/// An append refuses a copy of its own head by its last as well as its
+/// first, so a stale copy whose first has since left does not take a copy
+/// of the live head, the same chain from its second node, and make a ring
+/// of it.
 #[test]
 #[should_panic(expected = "tail queue: the queue is appended to itself")]
 fn a_stale_head_does_not_append_its_own_chain() {
@@ -1049,9 +1034,9 @@ fn a_stale_head_does_not_append_its_own_chain() {
     }
 }
 
-/// Review 9: a lookup by address walked a ring, which misuse can make,
-/// forever; it now checks each link's `prev` before it follows its `next`.
-/// Here the last node's forward word points back at the first.
+/// A lookup by address checks each link's `prev` before it follows its
+/// `next`, so it ends on a ring, which misuse can make, rather than walk it
+/// for ever.  Here the last node's forward word points back at the first.
 #[test]
 #[should_panic(expected = "tail queue: the queue is corrupt")]
 fn a_lookup_ends_on_a_ring() {

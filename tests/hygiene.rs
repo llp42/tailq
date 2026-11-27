@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 // SPDX-FileCopyrightText: 2026 Leonardo Lopes Pereira <leonardolopespereira@outlook.com>
 
-//! `adapter!` in a crate that puts itself under the name `core`.  The
-//! third review found that the macro named `::core`, which resolves in the
-//! caller's crate: a crate with an `offset_of!` that lied then made an
-//! adapter step 4096 bytes into a 24-byte node, from safe code, and one
-//! with an `assert!` that checked nothing let a packed node through.  The
-//! macro names everything through `$crate` now.
+//! `adapter!` in a crate that puts itself under the name `core`.  A path
+//! through `::core` resolves in the caller's crate, so through it a crate
+//! with an `offset_of!` that lies could make an adapter step 4096 bytes
+//! into a 24-byte node, from safe code, and one with an `assert!` that
+//! checks nothing could let a packed node through.  The macro names
+//! everything through `$crate`, so this crate's `core` changes nothing.
 
 #![forbid(unsafe_code)]
 
 // The macro must not resolve anything through this crate: if its
-// expansion named `::core` again, this crate would be used and the
+// expansion named `::core`, this crate would be used and the
 // expectation unfulfilled, and the expansion would not find `core::mem`.
 #[expect(
     unused_extern_crates,

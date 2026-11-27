@@ -123,7 +123,7 @@ Coverage must be complete: every code region of `src/` runs in the tests, in som
 `.github/coverage.py` checks it on the JSON of `cargo llvm-cov report --json`, after the tests ran under
 `cargo llvm-cov show-env`.
 
-Every problem a review found has a test: `tests/regressions.rs` names each one, `tests/misuse.rs` holds the misuse
+`tests/regressions.rs` holds one test per guarantee, each named after what it pins, `tests/misuse.rs` holds the misuse
 that debug builds catch, and `src/compile_fail.rs` what must not compile. The tests that need `testing/flip/`, a type
 macro whose answer changes from one expansion to the next, live in that crate, so that `tailq` does not depend on it:
 they check that `adapter!` names each type once.

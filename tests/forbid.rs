@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // SPDX-FileCopyrightText: 2026 Leonardo Lopes Pereira <leonardolopespereira@outlook.com>
 
-//! `adapter!` in a crate that forbids lints.  The ninth review found that
-//! a caller forbidding a lint the expansion allowed, dead code or
-//! single-use lifetimes, could declare no adapter, since `forbid`
-//! overrules an `allow`.  The expansion allows nothing now.
+//! `adapter!` in a crate that forbids lints.  A `forbid` overrules an
+//! `allow`, so an expansion that allowed a lint, dead code or single-use
+//! lifetimes, would declare no adapter in a crate that forbids it.  The
+//! expansion allows nothing, so adapters declare here.
 
 #![forbid(dead_code, single_use_lifetimes, unsafe_code)]
 

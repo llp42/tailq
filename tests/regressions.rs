@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: MIT
 // SPDX-FileCopyrightText: 2026 Leonardo Lopes Pereira <leonardolopespereira@outlook.com>
 
-//! One test per problem a review found, named after what it pins, so that
-//! the problem cannot come back unnoticed.  Run under Miri as well: several
-//! of them fail only there.  The misuse that debug builds catch is in
-//! `misuse.rs`, and what must not compile is in `src/compile_fail.rs`.
+//! One test per guarantee, named after what it pins, so that none of them
+//! breaks unnoticed: heads that move once emptied, pointers handed back
+//! with the access they were pushed with, iterator lengths and folds,
+//! walks by pointer that remove or move what they hand out, lookups by
+//! address, the layouts of heads and links, the names and paths `adapter!`
+//! takes and the checks it runs, how heads, walks and cursors print, and
+//! how long walks take.  Run under Miri as well: several of them fail only
+//! there.  The misuse that debug builds catch is in `misuse.rs`, and what
+//! must not compile is in `src/compile_fail.rs`.
 
 use core::array;
 use core::mem::size_of;
@@ -46,8 +51,9 @@ where
     queue.iter().map(|node| node.key).collect()
 }
 
-/// 0.1: once its last node left, a head pointed at itself, so moving an
-/// "empty" head and pushing again wrote into the old place.
+/// Once its last node leaves, a head holds no pointer to itself, so an
+/// emptied head moves like a new one and takes nodes again in its new
+/// place, where both walks find them.
 #[test]
 fn an_emptied_head_moves_and_takes_nodes_again() {
     let mut nodes = nodes::<3>();
@@ -65,10 +71,10 @@ fn an_emptied_head_moves_and_takes_nodes_again() {
     );
 }
 
-/// Mutant M1 of the second review: a cursor built from a pointer must
-/// reach the node through the pointer it was pushed with.  Here the
-/// pointer comes from a `&Node`, which may not write the node, so Miri
-/// fails this test if the cursor kept that pointer.
+/// A cursor built from a pointer reaches the node through the pointer it
+/// was pushed with.  Here the pointer comes from a `&Node`, which may not
+/// write the node, so Miri fails this test if the cursor kept that
+/// pointer.
 #[test]
 fn a_cursor_from_a_read_only_pointer_hands_back_the_push_access() {
     let mut nodes = nodes::<3>();
@@ -100,8 +106,8 @@ fn a_cursor_from_a_read_only_pointer_hands_back_the_push_access() {
     assert_eq!(nodes.map(|node| node.key), [10, 20, 3]);
 }
 
-/// Mutant M7 of the second review: `IterMut::last` lends the back
-/// payload, also after the back end moved, and nothing once exhausted.
+/// `IterMut::last` lends the back payload, also after the back end moved,
+/// and nothing once exhausted.
 #[test]
 fn iter_mut_last_lends_the_back_payload() {
     let mut nodes = nodes::<3>();
@@ -122,8 +128,9 @@ fn iter_mut_last_lends_the_back_payload() {
     assert_eq!(nodes.map(|node| node.key), [1, 22, 33]);
 }
 
-/// Mutant M4 of the second review: debug builds fill a leaving link's
-/// forward word with an address no link can have, `usize::MAX`.
+/// Debug builds fill a leaving link's forward word with an address no link
+/// can have, `usize::MAX`, so that a stale walk faults on a recognisable
+/// address.
 #[cfg(debug_assertions)]
 #[test]
 fn a_leaving_link_is_poisoned_in_debug_builds() {
@@ -145,8 +152,9 @@ fn a_leaving_link_is_poisoned_in_debug_builds() {
     }
 }
 
-/// Point 4 of the adoption review: a counted queue's iterators know how
-/// many nodes they have left, from either end.
+/// A counted queue's iterators know how many nodes they have left, from
+/// either end, so their size hint is exact and a `collect` reserves just
+/// what it needs.
 #[test]
 fn counted_iterators_know_their_length() {
     let mut nodes = nodes::<5>();
@@ -228,8 +236,8 @@ fn folds_visit_every_node_once() {
     );
 }
 
-/// Point 2 of the adoption review: `adapter!` takes lifetime and const
-/// parameters, and a node type that names a lifetime.
+/// `adapter!` takes lifetime and const parameters, and a node type that
+/// names a lifetime.
 #[test]
 fn adapters_take_lifetimes_and_consts() {
     struct Named<'name, T, const N: usize> {
@@ -273,8 +281,8 @@ fn adapters_take_lifetimes_and_consts() {
     assert_eq!(statics.front().map(|node| node.name), Some("static"));
 }
 
-/// The adoption review asked for a safe way to tell whether a queue holds
-/// a node named by address, and to remove it only if so.
+/// Safe code can tell whether a queue holds a node named by address, find
+/// a cursor on it, and remove it only if the queue holds it.
 #[test]
 fn lookups_by_address_are_safe() {
     let mut nodes = nodes::<4>();
@@ -305,8 +313,9 @@ fn lookups_by_address_are_safe() {
     queue.clear();
 }
 
-/// Coverage found the explicit `Clone` of a cursor, `IterMut::fold`, and
-/// the `Debug` of a mutable cursor and of a payload iterator never run.
+/// The explicit `Clone` of a cursor, `IterMut::fold`, and the `Debug` of a
+/// mutable cursor and of a payload iterator run in a test, as complete
+/// coverage needs, and answer as they should.
 #[test]
 fn cursors_and_iterators_clone_fold_and_print() {
     let mut nodes = nodes::<3>();
@@ -339,8 +348,8 @@ struct Wrapped<T> {
 
 tailq::adapter!(OverLink<T> = Wrapped<T> { link, mut link: Link });
 
-/// Coverage found that the checks `adapter!` runs at compile time never
-/// ran in a test: here they run, both ways.
+/// The checks `adapter!` runs at compile time answer at run time too, both
+/// ways, so that coverage reaches them.
 #[test]
 fn the_compile_time_checks_answer_at_run_time() {
     assert!(aligned::<Node, Link>(0));
@@ -397,10 +406,10 @@ unsafe fn by_pointer<const N: usize>(
     queue
 }
 
-/// The third review found that a walk over a head reached by pointer, a
-/// `static mut` one, ran into the poisoned link of the node it had just
-/// handed out when the walk was a `for_each`.  Removing what the walk just
-/// handed out works from either end, through `next` and through `fold`.
+/// A walk over a head reached by pointer, as a `static mut` one is, may
+/// remove the node it has just handed out, from either end, through `next`
+/// and through `fold`, which `for_each` runs: no step reads the link of a
+/// node the walk has handed out, which debug builds poison as it leaves.
 #[test]
 fn a_walk_by_pointer_may_remove_what_it_hands_out() {
     let ways: [u8; 4] = [0, 1, 2, 3];
@@ -442,21 +451,18 @@ fn a_walk_by_pointer_may_remove_what_it_hands_out() {
     }
 }
 
-/// The same review found that the head's `repr(C)` promised a count of a
-/// word without `Counted` being `repr(transparent)`.
+/// `Counted` is one word, and a counted head three, as the head's `repr(C)`
+/// layout promises.
 #[test]
 fn a_count_is_one_word() {
     assert_eq!(size_of::<Counted>(), size_of::<usize>());
     assert_eq!(size_of::<CountedQueue<'static>>(), 3 * size_of::<usize>());
 }
 
-// Review 3, mutation testing: each test below fails for a mutant no other
-// test noticed.
-
-/// Mutants M02 and M03: the membership walk debug builds run for a node
-/// named by address goes toward both ends at once, so a node next to
-/// either end of a long queue costs a step or two.  A walk toward one end
-/// only costs thousands of times more at the other.
+/// The membership walk debug builds run for a node named by address goes
+/// toward both ends at once, so a node next to either end of a long queue
+/// costs a step or two.  A walk toward one end only costs thousands of
+/// times more at the other.
 #[cfg(debug_assertions)]
 #[cfg_attr(miri, ignore = "times a walk")]
 #[test]
@@ -502,10 +508,10 @@ fn membership_walks_toward_the_nearer_end() {
     );
 }
 
-/// Mutant M12: a cursor found by address reaches the node through the
-/// pointer it was pushed with, not the one it was found by.  Here that one
-/// comes from a `&Node`, which may not write the node, so Miri fails this
-/// test if the cursor kept it.
+/// A cursor found by address reaches the node through the pointer it was
+/// pushed with, not the one it was found by.  Here that one comes from a
+/// `&Node`, which may not write the node, so Miri fails this test if the
+/// cursor kept it.
 #[test]
 fn a_cursor_found_by_a_read_only_pointer_hands_back_the_push_access() {
     let mut nodes = nodes::<3>();
@@ -537,8 +543,8 @@ fn a_cursor_found_by_a_read_only_pointer_hands_back_the_push_access() {
     assert_eq!(nodes.map(|node| node.key), [10, 20, 3]);
 }
 
-/// Mutants M14 and M15: `IterMut`'s `fold` and `rfold` lend the payloads
-/// in order, which a sum cannot tell.
+/// `IterMut`'s `fold` and `rfold` lend the payloads in order, which a sum
+/// cannot tell.
 #[test]
 fn payload_folds_keep_their_order() {
     let mut nodes = nodes::<4>();
@@ -556,8 +562,8 @@ fn payload_folds_keep_their_order() {
     assert_eq!(middle, [2, 3]);
 }
 
-/// Mutant M16: an uncounted queue's iterators count every node left, not
-/// the lower bound of their size hint, which is two from two nodes on.
+/// An uncounted queue's iterators count every node left, not the lower
+/// bound of their size hint, which is two from two nodes on.
 #[test]
 fn uncounted_iterators_count_every_node() {
     let mut nodes = nodes::<4>();
@@ -585,8 +591,8 @@ struct After {
 tailq::adapter!(BeforeLink = Before { link, mut key: u64 });
 tailq::adapter!(AfterLink = After { link, mut key: u64 });
 
-/// Mutant M26: a payload may touch the link on either side; only an
-/// overlap fails the check.
+/// A payload may touch the link on either side; only an overlap fails the
+/// check.
 #[test]
 fn payloads_may_touch_the_link() {
     check_payload::<BeforeLink>();
@@ -614,8 +620,8 @@ fn payloads_may_touch_the_link() {
     assert_eq!(keys, (Some(11), Some(22)));
 }
 
-/// Requirement audit, e54b390: the iterators are `FusedIterator`, which
-/// generic code may rely on.  Mutant M33 drops one impl.
+/// Each of the three iterators is `FusedIterator`, which generic code may
+/// rely on.
 #[test]
 fn iterators_are_fused() {
     use core::iter::FusedIterator;
@@ -632,9 +638,9 @@ fn iterators_are_fused() {
     fused(&queue.iter_mut());
 }
 
-/// Requirement audit, 6a21a14: a head is `repr(C)`, the first node's link,
-/// the last node's, then the length.  Mutant M35 drops the `repr(C)`; only
-/// a layout that reorders the fields, as `-Zrandomize-layout` may, shows it.
+/// A head is `repr(C)`: the first node's link, the last node's, then the
+/// length.  A head without its `repr(C)` fails here only in a layout that
+/// reorders the fields, as `-Zrandomize-layout` may.
 #[test]
 fn a_head_holds_first_last_then_count() {
     /// The head's documented layout.
@@ -660,8 +666,8 @@ fn a_head_holds_first_last_then_count() {
     assert_eq!((read, words.count), (ends, 3));
 }
 
-/// Requirement audit, 6a21a14: a head in a `ManuallyDrop` leaves its nodes
-/// alone when it goes, still marked as linked.
+/// A head in a `ManuallyDrop` leaves its nodes alone when it goes, still
+/// marked as linked.
 #[test]
 fn a_forgotten_head_leaves_its_nodes_marked() {
     use core::mem::ManuallyDrop;
@@ -675,10 +681,9 @@ fn a_forgotten_head_leaves_its_nodes_marked() {
     assert!(nodes.iter().all(|node| node.link.is_linked()));
 }
 
-/// The fourth review found that a lifetime parameter named `'node` met the
-/// macro's own binder of that name, and that a type named `Headers` in the
-/// bounds met the macro's check item: both are named so that no caller's
-/// name meets them now.
+/// `adapter!` takes a lifetime parameter named `'node` and a type named
+/// `Headers` in its bounds: the macro's own binder and check item are
+/// named so that no caller's name meets them.
 #[test]
 fn adapters_take_any_names() {
     trait Marked<Mark> {}
@@ -713,11 +718,9 @@ fn adapters_take_any_names() {
     );
 }
 
-/// The fourth review found that the third round's promise, that a walk
-/// ends early when a node at its other end leaves, did not hold, and the
-/// walk contract is now what holds: removing the node a walk has just
-/// handed out, from either end.  Here a counted walk alternates ends,
-/// removes each node it hands out, and still knows how many it has left.
+/// The walk contract allows removing the node a walk has just handed out,
+/// from either end.  Here a counted walk alternates ends, removes each
+/// node it hands out, and still knows how many it has left.
 #[test]
 fn a_walk_by_pointer_may_mix_ends_while_removing_what_it_hands_out() {
     let mut nodes = nodes::<5>();
@@ -748,9 +751,6 @@ fn a_walk_by_pointer_may_mix_ends_while_removing_what_it_hands_out() {
     assert_eq!(seen, [(1, 4), (5, 3), (2, 2), (4, 1), (3, 0)]);
 }
 
-// Review 4, mutation testing and requirement audit: each test below fails
-// for a mutant no other test noticed.
-
 /// A node whose payload lies four bytes past a multiple of the link's
 /// alignment.
 #[repr(C)]
@@ -762,7 +762,7 @@ struct Tagged {
 
 tailq::adapter!(TaggedLink = Tagged { link, mut key: u32 });
 
-/// Mutant L02: a payload needs its own alignment, not the link's.
+/// A payload needs its own alignment, not the link's.
 #[test]
 fn a_payload_needs_only_its_own_alignment() {
     assert_eq!(payload_offset::<Tagged, u32>(20, 20), 20);
@@ -782,11 +782,11 @@ fn a_payload_needs_only_its_own_alignment() {
     );
 }
 
-/// Mutants R01 and X01, and round 3's M35, which only a reordered layout
-/// showed: the head is `repr(C)`, `Counted` `repr(transparent)` and a link
+/// The head is `repr(C)`, `Counted` `repr(transparent)` and a link
 /// `repr(C)`, as the docs promise.  Only then may an `extern "C"` function
 /// take them by value: otherwise `improper_ctypes_definitions` fails this
-/// file.
+/// file, in any layout, where reading a head's words shows a missing
+/// `repr(C)` only in a reordered one.
 #[deny(improper_ctypes_definitions)]
 extern "C" fn by_value(queue: CountedQueue<'static>, link: Link) -> usize {
     queue.len().wrapping_add(usize::from(link.is_linked()))
@@ -797,14 +797,15 @@ fn heads_counts_and_links_have_c_layouts() {
     assert_eq!(by_value(CountedQueue::new(), Link::new()), 0);
 }
 
-/// Rounds 3 and 4: a walk over a head reached by pointer met a queue that
-/// had lost a node the walk had not handed out yet, the node at its other
-/// end, and stepped past the queue's end, handed out the node that left, or
-/// read its `prev` through `unwrap_unchecked`.  The walk contract forbids
-/// that change, and debug builds catch it where the walk meets it, from
-/// either end, through `next`, `next_back`, `fold` and `rfold`: as a node
-/// that left, when it is the next one the walk hands out, or as a queue
-/// that changed, when the walk finds the queue's end before its own.
+/// A walk over a head reached by pointer may meet a queue that has lost a
+/// node the walk has not handed out yet, the node at its other end.
+/// Unchecked, the walk would step past the queue's end, hand out the node
+/// that left, or read its `prev` through `unwrap_unchecked`.  The walk
+/// contract forbids that change, and debug builds catch it where the walk
+/// meets it, from either end, through `next`, `next_back`, `fold` and
+/// `rfold`: as a node that left, when it is the next one the walk hands
+/// out, or as a queue that changed, when the walk finds the queue's end
+/// before its own.
 #[cfg(debug_assertions)]
 #[test]
 fn a_walk_catches_a_node_it_had_not_handed_out_leaving() {
@@ -865,10 +866,10 @@ fn a_walk_catches_a_node_it_had_not_handed_out_leaving() {
     }
 }
 
-/// The fifth review found that, with nightly's enum paths in `offset_of!`
-/// and a const `DerefMut`, the raw place of a link reached through a
-/// deref named another type's link while `offset_of!` measured the node:
-/// the place must now lie where `offset_of!` says.
+/// With nightly's enum paths in `offset_of!` and a const `DerefMut`, the
+/// raw place of a link reached through a deref could name another type's
+/// link while `offset_of!` measures the node: the place must lie where
+/// `offset_of!` says, and the check fails when it does not.
 #[test]
 #[should_panic(
     expected = "tailq::adapter!: the path reaches the link through a deref"
@@ -885,16 +886,12 @@ fn a_payload_reached_through_a_deref_fails_its_check() {
     assert_eq!(payload_offset::<Node, u32>(16, -8), 16);
 }
 
-// Review 5, mutation testing: each test below fails for a mutant no other
-// test noticed.
-
-/// Mutants I06 and I07: a walk over a head reached by pointer may move the
-/// node it has just handed out to another queue, which is what BSD's
-/// `TAILQ_FOREACH_SAFE` is for, from either end, through `fold` and
-/// `rfold` as well as `next` and `next_back`.  A removal alone cannot show
-/// a step that reads the link after it hands the node out: release builds
-/// leave a leaving link's forward word as it was.  A push onto another
-/// queue rewrites it.
+/// A walk over a head reached by pointer may move the node it has just
+/// handed out to another queue, which is what BSD's `TAILQ_FOREACH_SAFE`
+/// is for, from either end, through `fold` and `rfold` as well as `next`
+/// and `next_back`.  A removal alone cannot show a step that reads the
+/// link after it hands the node out: release builds leave a leaving link's
+/// forward word as it was.  A push onto another queue rewrites it.
 #[test]
 fn a_walk_by_pointer_may_move_what_it_hands_out_to_another_queue() {
     let ways: [u8; 4] = [0, 1, 2, 3];
@@ -946,11 +943,10 @@ fn a_walk_by_pointer_may_move_what_it_hands_out_to_another_queue() {
     }
 }
 
-/// Mutants I14 and I15: an iterator answers `last` from its back end, and a
-/// counted one `count` from its count, in O(1), as e54b390 and 6a21a14
-/// promise; the default methods walk every node to the end.  A queue of
-/// 16384 nodes takes them no longer than one of two, with fifty times the
-/// slack.
+/// An iterator answers `last` from its back end, and a counted one `count`
+/// from its count, in O(1), where the default methods walk every node to
+/// the end.  A queue of 16384 nodes takes them no longer than one of two,
+/// with fifty times the slack.
 #[cfg_attr(miri, ignore = "times a walk")]
 #[test]
 fn last_and_a_counted_count_take_constant_time() {
@@ -1002,16 +998,13 @@ fn last_and_a_counted_count_take_constant_time() {
     );
 }
 
-// Review 5, requirement audit: the performance problem the fourth round's
-// review found had no test.
-
-/// The fourth round's performance review, fixed in f3ac729: at sixteen
-/// nodes the third and fourth rounds' steps made `rfold` up to half again
-/// as slow, and `find` from the back slower still, than the same walks
-/// from the front.  At 7095186 `rfold` took 1.7 times as long as `fold`
-/// here, and `find` from the back 1.3 times as long as from the front,
-/// against 1.05 and 0.95 at f3ac729.  Optimised builds only, best of
-/// fifteen trials, each walk timed beside the others.
+/// At sixteen nodes, `rfold` and `find` from the back take about as long
+/// as the same walks from the front: `rfold` less than 1.35 times as long
+/// as `fold`, and `find` from the back less than 1.2 times as long as from
+/// the front.  The bounds lie between the ratios of steps that cost the
+/// same both ways, about 1.05 and 0.95, and those of a backward step that
+/// costs more, 1.7 and 1.3.  Optimised builds only, best of fifteen
+/// trials, each walk timed beside the others.
 #[cfg(not(debug_assertions))]
 #[cfg_attr(miri, ignore = "times a walk")]
 #[test]
@@ -1077,14 +1070,10 @@ fn backward_walks_cost_what_forward_ones_do() {
     );
 }
 
-// Review 5: the expansion's locals are named so that no item of the
-// caller's meets them.
-
-/// The locals of the expansion, `slot` and `node`, met a constant or a unit
-/// struct of the caller's of those names, which a `let` or a closure's
-/// parameter cannot shadow, as the fourth review's `'node` and `Headers`
-/// did: `adapter!` failed to compile beside them.  They are named so that
-/// no caller's name meets them now.
+/// `adapter!` compiles beside a constant named `node` and a unit struct
+/// named `slot`, which a `let` or a closure's parameter cannot shadow: the
+/// expansion's locals are named so that no caller's name meets them, as
+/// its binder and check item are in `adapters_take_any_names`.
 #[test]
 #[expect(
     non_upper_case_globals,
@@ -1146,11 +1135,9 @@ fn adapters_meet_no_const_parameter_of_the_callers() {
     assert_eq!(queue.front().map(|front| front.keys), Some([2, 1]));
 }
 
-/// f3ac729 says that before a walk hands a node out it checks, in debug
-/// builds, that the node is still on the queue, but `last` handed out the
-/// walk's back node unchecked, one of the ways 7095186 named of handing out
-/// a node that had left.  Fails until `last` checks it (see
-/// `fix_last.diff`).
+/// Before a walk hands a node out it checks, in debug builds, that the
+/// node is still on the queue, and `last` checks the walk's back node too:
+/// it does not hand that node out once it has left.
 #[cfg(debug_assertions)]
 #[test]
 #[should_panic(
@@ -1172,11 +1159,11 @@ fn last_catches_the_back_node_leaving() {
     }
 }
 
-/// Review 6: a cursor borrows its queue, so code that reaches a head by
-/// pointer ends its use of one before it changes the queue, unlike a walk,
-/// which allows removing the node it just handed out.  Here a cursor finds
-/// each node to remove and the one after it, the removal follows, and a
-/// new cursor starts from the one after.
+/// A cursor borrows its queue, so code that reaches a head by pointer ends
+/// its use of one before it changes the queue, unlike a walk, which allows
+/// removing the node it just handed out.  Here a cursor finds each node to
+/// remove and the one after it, the removal follows, and a new cursor
+/// starts from the one after.
 #[test]
 fn a_cursor_by_pointer_is_done_before_the_queue_changes() {
     let mut nodes = nodes::<4>();
@@ -1205,11 +1192,11 @@ fn a_cursor_by_pointer_is_done_before_the_queue_changes() {
     assert_eq!((removed, keys(&head)), (vec![2, 4], vec![1, 3]));
 }
 
-/// Review 6: debug builds read links an operation does not touch, so a
-/// node's other queues stay unused while one lends its payload, even when
-/// the payload holds their links.  Here the run queue lends a thread's
-/// scheduling state, which holds its link on the queue of every thread,
-/// and that queue is used only once the loan ends.
+/// Debug builds read links an operation does not touch, so a node's other
+/// queues stay unused while one lends its payload, even when the payload
+/// holds their links.  Here the run queue lends a thread's scheduling
+/// state, which holds its link on the queue of every thread, and that
+/// queue is used only once the loan ends.
 #[test]
 fn a_payload_holding_another_queues_link_is_lent_while_that_queue_rests() {
     struct Thread {
@@ -1259,13 +1246,10 @@ fn a_payload_holding_another_queues_link_is_lent_while_that_queue_rests() {
     }
 }
 
-// Review 6, mutation testing: each test below fails for a mutant no other
-// test noticed.
-
-/// Mutants A09 and A10: every local of the expansion is named so that no
-/// item of the caller's meets it, not only the two the fifth review found.
-/// A local named `at` meets a constant, which a `let` cannot shadow, and
-/// one named `spare` a unit struct.
+/// Every local of the expansion is named so that no item of the caller's
+/// meets it, not only `node` and `slot`.  A local named `at` would meet a
+/// constant, which a `let` cannot shadow, and one named `spare` a unit
+/// struct.
 #[test]
 #[expect(
     non_upper_case_globals,
@@ -1296,11 +1280,11 @@ fn adapters_meet_no_item_named_like_their_locals() {
     assert_eq!(queue.front().map(|front| front.key), Some(8));
 }
 
-/// Review 7: a node named by address is reached through the pointer given,
-/// which must reach its link: one taken from a `&Node` does, as a link's
-/// words are cells, and so does one saved from the push, while one taken
-/// from a lent `&mut` payload reaches the payload only.  Here a walk by
-/// pointer removes what it hands out through each of the first two.
+/// A node named by address is reached through the pointer given, which
+/// must reach its link: one taken from a `&Node` does, as a link's words
+/// are cells, and so does one saved from the push, while one taken from a
+/// lent `&mut` payload reaches the payload only.  Here a walk by pointer
+/// removes what it hands out through each of the first two.
 #[test]
 fn a_walk_by_pointer_removes_through_a_pointer_that_reaches_the_link() {
     for backward in [false, true] {
@@ -1361,13 +1345,10 @@ fn a_walk_by_pointer_removes_through_a_pointer_that_reaches_the_link() {
     }
 }
 
-// Review 7, mutation testing: the test below fails for mutants no other
-// test noticed.
-
-/// Mutants D1 and D3: a head, a walk and a cursor print the links they
-/// hold, each under its own name: a head its first and last, a walk its
-/// front and back, a cursor the link it rests on.  Nothing read more than
-/// the head's count and the type names.
+/// A head, a walk and a cursor print the links they hold, each under its
+/// own name: a head its first and last, a walk its front and back, a
+/// cursor the link it rests on.  Each name is checked with its link's
+/// address, which the type names and the head's count do not show.
 #[test]
 fn heads_walks_and_cursors_print_their_own_links() {
     let mut nodes = nodes::<3>();

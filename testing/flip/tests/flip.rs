@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // SPDX-FileCopyrightText: 2026 Leonardo Lopes Pereira <leonardolopespereira@outlook.com>
 
-//! The fifth review found that `adapter!` pasted its node type at eight
-//! places, and a type macro expands at each: a macro answering differently
-//! each time made `Node` one type and `OFFSET` another's, from safe code.
-//! Each adapter here is declared with `flip!`, which names `Fake` at one
+//! A type macro expands wherever `adapter!` pastes the node type, so if it
+//! pasted it more than once, a macro answering differently each time could
+//! make `Node` one type and `OFFSET` another's, from safe code.  Each
+//! adapter here is declared with `flip!`, which names `Fake` at one
 //! expansion and `Real` at every other; each must measure the node it
 //! declares, wherever the odd answer falls.
 
@@ -68,7 +68,7 @@ fn an_adapter_measures_the_node_it_declares() {
     assert_eq!(size_of::<Real>(), size_of::<Fake>());
 }
 
-// Review 6, mutant A13: a payload adapter's node type is pasted once too.
+// A payload adapter's node type is pasted once too.
 
 /// A payload node whose link and payload are not at its start.
 #[repr(C)]

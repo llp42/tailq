@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Leonardo Lopes Pereira <leonardolopespereira@outlook.com>
 
 //! `adapter!` in a `no_std` crate that puts itself under the name `std`.
-//! Review 4 found that `hygiene.rs` catches a `::core` path in the
-//! expansion but not a `::std` one, which would fail every `no_std` user
-//! and resolve, like `::core`, in the caller's crate, which can shadow it.
+//! `hygiene.rs` catches a `::core` path in the expansion, and this test a
+//! `::std` one, which would fail every `no_std` user and resolve, like
+//! `::core`, in the caller's crate, which can shadow it.
 
 #![no_std]
 #![forbid(unsafe_code)]

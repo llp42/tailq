@@ -398,8 +398,8 @@
 //! ] = Node { link });
 //! ```
 //!
-//! Review 3, mutant M22: a generic adapter cannot be checked where it is
-//! declared, so the queue checks it where it first lends a payload:
+//! A generic adapter cannot be checked where it is declared, so the queue
+//! checks it where it first lends a payload:
 //!
 //! ```compile_fail,E0080
 //! use tailq::{Link, TailQueue};
@@ -409,9 +409,9 @@
 //! let _ = queue.front_mut();
 //! ```
 //!
-//! Review 3, mutant M24: called directly, the macro's rules cannot measure
-//! a payload in another type than the adapter's node, here 64 bytes past
-//! the end of a 24-byte node, which the overlap check would pass:
+//! Called directly, the macro's rules cannot measure a payload in another
+//! type than the adapter's node, here 64 bytes past the end of a 24-byte
+//! node, which the overlap check would pass:
 //!
 //! ```compile_fail,E0308
 //! use tailq::Link;
@@ -423,8 +423,8 @@
 //! tailq::__adapter!(@payload NodeLink [] [] [] Fake, [big: [u8; 64]]);
 //! ```
 //!
-//! Mutant M32: an adapter with no parameters is checked where it is
-//! declared, even if no queue ever lends its payload:
+//! An adapter with no parameters is checked where it is declared, even if
+//! no queue ever lends its payload:
 //!
 //! ```compile_fail,E0080
 //! use tailq::Link;
@@ -433,8 +433,8 @@
 //! tailq::adapter!(RunLink = Thread { sched.link, mut sched: Sched });
 //! ```
 //!
-//! Requirement audit, e54b390: every operation that hands a node back is
-//! `must_use`, not only `remove_current` (mutant M34 drops one):
+//! Every operation that hands a node back is `must_use`, not only
+//! `remove_current`:
 //!
 //! ```compile_fail
 //! #![deny(unused_must_use)]
@@ -513,9 +513,9 @@
 //! tailq::__adapter!(@payload NodeLink [] [] [] Fake, [big: [u8; 8]]);
 //! ```
 //!
-//! Review 4, mutant T01: a packed node fails even with its link first, at
-//! offset 0, where only the node's own alignment shows that the link is
-//! unaligned, as it is in every node of an array but the first:
+//! A packed node fails even with its link first, at offset 0, where only
+//! the node's own alignment shows that the link is unaligned, as it is in
+//! every node of an array but the first:
 //!
 //! ```compile_fail,E0080
 //! use tailq::Link;
@@ -524,11 +524,11 @@
 //! tailq::adapter!(NodeLink = Node { link });
 //! ```
 //!
-//! Review 5, mutant A05: a payload field that only derefs to the payload's
-//! type fails to compile, here a `Box<u64>` that would be lent as the
-//! `u64` of its pointer, which safe code could then overwrite.  The raw
-//! place proves the field's type; the reference check alone, a closure's
-//! return and so a coercion site, would let the box deref to its `u64`:
+//! A payload field that only derefs to the payload's type fails to
+//! compile, here a `Box<u64>` that would be lent as the `u64` of its
+//! pointer, which safe code could then overwrite.  The raw place proves
+//! the field's type; the reference check alone, a closure's return and so
+//! a coercion site, would let the box deref to its `u64`:
 //!
 //! ```compile_fail,E0308
 //! use tailq::Link;
@@ -537,9 +537,9 @@
 //! ```
 //!
 //! On nightly, `offset_of!` walks into an enum's variant, which a field
-//! access cannot, so the raw place went through a const `DerefMut` to
-//! another type's link while the offset was that of a reference; the
-//! place must now lie where `offset_of!` says:
+//! access cannot, so the raw place could go through a const `DerefMut` to
+//! another type's link while the offset is that of a reference; the place
+//! must lie where `offset_of!` says:
 //!
 //! ```compile_fail,E0080
 //! #![feature(offset_of_enum, const_trait_impl, const_convert)]
@@ -585,12 +585,12 @@
 //! tailq::adapter!(NodeLink = Node { V.link });
 //! ```
 //!
-//! Review 6: the link's places sit in an `unsafe` block, so a path could
-//! take a union field there and deref its `ManuallyDrop`, which a reference
-//! to the field outside the block now rejects.  Here a one-variant enum
-//! derefs, reading nothing, to its own field, a union; the place reaches a
-//! link through the union's `V` while `offset_of!` measures its `link: ()`,
-//! and a node built as `Pun { link: () }` holds no link at `OFFSET`:
+//! The link's places sit in an `unsafe` block, so a path could take a
+//! union field there and deref its `ManuallyDrop`, which a reference to
+//! the field outside the block rejects.  Here a one-variant enum derefs,
+//! reading nothing, to its own field, a union; the place reaches a link
+//! through the union's `V` while `offset_of!` measures its `link: ()`, and
+//! a node built as `Pun { link: () }` holds no link at `OFFSET`:
 //!
 //! ```compile_fail,E0133
 //! #![feature(offset_of_enum, const_trait_impl, const_convert)]
@@ -612,11 +612,10 @@
 //! tailq::adapter!(NodeLink = Node { V.x.link });
 //! ```
 //!
-//! Review 6, mutants A04 to A06: the payload's place, too, is taken
-//! through shared derefs only, on a slot nothing writes, and must lie where
-//! `offset_of!` says.  On nightly a payload path through an enum's variant
-//! reached through a const `DerefMut` would otherwise lend a `&mut u64`
-//! over a `&'static u64`:
+//! The payload's place, too, is taken through shared derefs only, on a
+//! slot nothing writes, and must lie where `offset_of!` says.  On nightly
+//! a payload path through an enum's variant reached through a const
+//! `DerefMut` would otherwise lend a `&mut u64` over a `&'static u64`:
 //!
 //! ```compile_fail,E0080
 //! #![feature(offset_of_enum, const_trait_impl, const_convert)]
@@ -665,9 +664,9 @@
 //! tailq::adapter!(NodeLink = Node { link, mut payload.V.key: u64 });
 //! ```
 //!
-//! Review 7: called directly, the payload rule checks that its node is the
-//! adapter's without a coercion, which would let the node's pointer unsize
-//! to one to a trait object:
+//! Called directly, the payload rule checks that its node is the adapter's
+//! without a coercion, which would let the node's pointer unsize to one to
+//! a trait object:
 //!
 //! ```compile_fail,E0308
 //! use tailq::Link;
@@ -676,9 +675,9 @@
 //! tailq::__adapter!(@payload NodeLink [] [] [] dyn core::any::Any, [key: u64]);
 //! ```
 //!
-//! Review 7 found these rejected, and pins them.  On nightly, a link or a
-//! payload in a field that is unsafe to reach, which only the reference
-//! taken outside the macro's `unsafe` block rejects:
+//! On nightly, a link or a payload in a field that is unsafe to reach,
+//! which only the reference taken outside the macro's `unsafe` block
+//! rejects:
 //!
 //! ```compile_fail,E0133
 //! #![feature(unsafe_fields)]

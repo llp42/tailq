@@ -3,20 +3,20 @@
 
 //! `flip!(key; T0, T1, ...)` expands to `T0` the first time it is expanded
 //! with that key, `T1` the second, and so on, then the last one: a type
-//! macro that is not a function of its input, written in safe code.  The
-//! fifth review used one to show that `adapter!` pasted its node type
-//! several times, so that each paste could name another type.
+//! macro that is not a function of its input, written in safe code.  With
+//! it, a test can tell whether `adapter!` pastes a type more than once,
+//! since each paste could then name another type.
 //!
 //! `tailq`'s tests that need it live here, so that `tailq` has no
 //! dependency on it, which its package could not ship: `tests/flip.rs`
 //! checks that every adapter measures the node it declares, and the
 //! doctests below what must not compile.
 //!
-//! The fifth review found the node and payload types pasted several times
-//! into the expansion, and a type macro expands at each paste: a macro
-//! answering differently each time lent a 64-byte payload over a one-byte
-//! field.  Each type is pasted once now, and a payload whose one paste is
-//! not its field's type fails:
+//! A type macro expands at each paste of a type into the expansion, so a
+//! macro answering differently each time could lend a 64-byte payload
+//! over a one-byte field if the payload type were pasted twice.  Each type
+//! is pasted once, and a payload whose one paste is not its field's type
+//! fails:
 //!
 //! ```compile_fail,E0308
 //! use tailq::Link;
@@ -24,11 +24,11 @@
 //! tailq::adapter!(NodeLink = Node { link, mut key: tailq_flip::flip!(k; [u8; 64], u8) });
 //! ```
 //!
-//! The sixth review found that the raw place proving the payload's type
-//! must name it as `Self::Payload`, not by a second paste.  A paste that
-//! answered `Box<u64>` there, after `u64` for the payload type, would pass
-//! the reference check too, a coercion site where the box derefs to its
-//! `u64`, and lend the box's pointer as a `&mut u64`:
+//! The raw place proving the payload's type names it as `Self::Payload`,
+//! not by a second paste.  A paste that answered `Box<u64>` there, after
+//! `u64` for the payload type, would pass the reference check too, a
+//! coercion site where the box derefs to its `u64`, and lend the box's
+//! pointer as a `&mut u64`:
 //!
 //! ```compile_fail,E0308
 //! use tailq::Link;
