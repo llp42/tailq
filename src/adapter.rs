@@ -1,72 +1,31 @@
 // SPDX-License-Identifier: MIT
 // SPDX-FileCopyrightText: 2026 Leonardo Lopes Pereira <leonardolopespereira@outlook.com>
 
-//! How a queue finds a node's link: the adapter trait and the
-//! [`adapter!`](crate::adapter!) macro that implements it.
+//! How a queue finds a node's link and payload: the adapter traits, which
+//! only [`adapter!`](crate::adapter!) implements, and the macro.
 
+use super::__private::Sealed;
 use super::Link;
+use core::mem::size_of;
 use core::ptr::NonNull;
 
-/// Maps a node type to the [`Link`] it embeds, and back.
+/// Maps a node type to the [`Link`] it embeds.
 ///
-/// [`adapter!`](crate::adapter!) declares an adapter type and implements
-/// it; implement it by hand only for what the macro cannot express.  An
-/// adapter is a type a queue names as its type parameter and never holds
-/// a value of, so it is best uninhabited.
-///
-/// ```
-/// use core::convert::Infallible;
-/// use core::mem::offset_of;
-/// use core::ptr::NonNull;
-/// use tailq::{Adapter, Link, TailQueue};
-///
-/// struct Thread {
-///     id: u32,
-///     link: Link,
-/// }
-///
-/// struct ThreadLink(Infallible);
-///
-/// // SAFETY: both directions step by the offset of `link`, an aligned
-/// // `Link` field, from the pointer they are given.
-/// unsafe impl Adapter for ThreadLink {
-///     type Node = Thread;
-///
-///     unsafe fn link(node: NonNull<Thread>) -> NonNull<Link> {
-///         unsafe { NonNull::new_unchecked(&raw mut (*node.as_ptr()).link) }
-///     }
-///
-///     unsafe fn node(link: NonNull<Link>) -> NonNull<Thread> {
-///         unsafe { link.byte_sub(offset_of!(Thread, link)).cast() }
-///     }
-/// }
-///
-/// type RunQueue<'nodes> = TailQueue<'nodes, ThreadLink>;
-/// ```
+/// [`adapter!`](crate::adapter!) declares the types that implement it, and
+/// nothing else may: the trait is sealed.  Code generic over queues names
+/// it in bounds, `A: Adapter`, and reaches the node type as `A::Node`.
 ///
 /// # Safety
 ///
-/// `link` must return a pointer to an aligned [`Link`] inside the node it
-/// is given, at the same offset for every node, and `node` must invert
-/// it; both must derive their result from the pointer they are given, so
-/// that it keeps that pointer's access.
-pub unsafe trait Adapter {
+/// Only [`adapter!`](crate::adapter!) implements it.  `OFFSET` is the
+/// offset of an aligned [`Link`] field in every `Node`.
+pub unsafe trait Adapter: Sealed {
     /// The node type that embeds the link.
     type Node;
 
-    /// Returns the link embedded in `node`.
-    ///
-    /// # Safety
-    ///
-    /// `node` must point at a live node.
-    unsafe fn link(node: NonNull<Self::Node>) -> NonNull<Link>;
-
-    /// Returns the node that embeds `link`.
-    ///
-    /// # Safety
-    ///
-    /// `link` must be the link of a live node.
-    unsafe fn node(link: NonNull<Link>) -> NonNull<Self::Node>;
+    /// The offset of the link in the node, in bytes.
+    #[doc(hidden)]
+    const OFFSET: usize;
 }
 
 /// An [`Adapter`] whose nodes hold a payload apart from their link, which
@@ -79,7 +38,9 @@ pub unsafe trait Adapter {
 /// [`adapter!`](crate::adapter!) implements it when the field list names
 /// the payload after the link, `Thread { link, mut info: Info }`.  A
 /// queue hands out only `&A::Node` otherwise, since a `&mut` to the
-/// whole node could overwrite its link.
+/// whole node could overwrite its link.  The queue checks at compile time,
+/// where it first lends a payload, that the payload lies apart from the
+/// link.
 ///
 /// A payload may hold the links of other queues.  A node is on several
 /// queues only through pushes by pointer, and their contract then makes
@@ -88,19 +49,80 @@ pub unsafe trait Adapter {
 ///
 /// # Safety
 ///
-/// `payload` must return a pointer to an aligned `Self::Payload` inside
-/// the node it is given, derived from that pointer, that does not overlap
-/// the [`Link`] that [`Adapter::link`] finds.
+/// Only [`adapter!`](crate::adapter!) implements it.  `PAYLOAD_OFFSET` is
+/// the offset of an aligned `Payload` field in every `Node`.
 pub unsafe trait Payload: Adapter {
     /// The part of a node a queue lends mutably.
     type Payload;
 
-    /// Returns the payload of `node`.
-    ///
-    /// # Safety
-    ///
-    /// `node` must point at a live node.
-    unsafe fn payload(node: NonNull<Self::Node>) -> NonNull<Self::Payload>;
+    /// The offset of the payload in the node, in bytes.
+    #[doc(hidden)]
+    const PAYLOAD_OFFSET: usize;
+}
+
+/// Returns the link embedded in `node`.
+///
+/// # Safety
+///
+/// `node` must point at a live node.
+#[inline]
+pub(crate) const unsafe fn link_of<A>(node: NonNull<A::Node>) -> NonNull<Link>
+where
+    A: Adapter,
+{
+    // SAFETY: the link lies `OFFSET` bytes into the live node.
+    unsafe { node.byte_add(A::OFFSET).cast() }
+}
+
+/// Returns the node that embeds `link`.
+///
+/// # Safety
+///
+/// `link` must be the link of a live node.
+#[inline]
+pub(crate) const unsafe fn node_of<A>(link: NonNull<Link>) -> NonNull<A::Node>
+where
+    A: Adapter,
+{
+    // SAFETY: the link lies `OFFSET` bytes into its live node.
+    unsafe { link.byte_sub(A::OFFSET).cast() }
+}
+
+/// Checks, in a constant, that the payload of `A`'s nodes lies apart from
+/// their link.
+///
+/// # Panics
+///
+/// At compile time, when the payload overlaps the link.
+#[inline]
+pub const fn check_payload<A>()
+where
+    A: Payload,
+{
+    let (link, payload) = (A::OFFSET, A::PAYLOAD_OFFSET);
+    assert!(
+        payload.saturating_add(size_of::<A::Payload>()) <= link
+            || link.saturating_add(size_of::<Link>()) <= payload,
+        "tailq: the payload overlaps the link",
+    );
+}
+
+/// Returns the payload of `node`, after checking at compile time that it
+/// lies apart from the link.
+///
+/// # Safety
+///
+/// `node` must point at a live node.
+#[inline]
+pub(crate) const unsafe fn payload_of<A>(
+    node: NonNull<A::Node>,
+) -> NonNull<A::Payload>
+where
+    A: Payload,
+{
+    const { check_payload::<A>() };
+    // SAFETY: the payload lies `PAYLOAD_OFFSET` bytes into the live node.
+    unsafe { node.byte_add(A::PAYLOAD_OFFSET).cast() }
 }
 
 /// Declares an [`Adapter`]: an uninhabited type that links a node type
@@ -132,8 +154,9 @@ pub unsafe trait Payload: Adapter {
 ///
 /// One node joins several queues at once through several fields, each
 /// with its adapter.  A link inside a nested field takes its path,
-/// `Thread { sched.link }`.  A generic node takes the adapter's type
-/// parameters after its name, and their bounds in a trailing `where`:
+/// `Thread { sched.link }`.  A generic node takes the adapter's
+/// parameters after its name, lifetimes, types and consts, and their
+/// bounds in a trailing `where`:
 ///
 /// ```
 /// use core::marker::PhantomData;
@@ -145,14 +168,21 @@ pub unsafe trait Payload: Adapter {
 ///     link: Link,
 /// }
 ///
-/// struct Thread<P: Platform> {
+/// struct Thread<'name, P: Platform, const CPUS: usize> {
+///     name: &'name str,
+///     affinity: [bool; CPUS],
 ///     platform: PhantomData<P>,
 ///     sched: Sched,
 /// }
 ///
-/// tailq::adapter!(SchedLink<P> = Thread<P> { sched.link } where P: Platform);
+/// tailq::adapter!(
+///     SchedLink<'name, P, const CPUS: usize> = Thread<'name, P, CPUS> {
+///         sched.link
+///     } where P: Platform
+/// );
 ///
-/// type RunQueue<'nodes, P> = TailQueue<'nodes, SchedLink<P>>;
+/// type RunQueue<'nodes, 'name, P, const CPUS: usize> =
+///     TailQueue<'nodes, SchedLink<'name, P, CPUS>>;
 /// ```
 ///
 /// A queue whose head lives in a `static` takes `'static` nodes, such as
@@ -212,8 +242,8 @@ pub unsafe trait Payload: Adapter {
 /// assert_eq!(runtimes, [10, 2]);
 /// ```
 ///
-/// The payload must not overlap the link, which the first use of the
-/// adapter's payload checks at compile time:
+/// The payload must not overlap the link, which the queue checks at
+/// compile time where it first lends a payload:
 ///
 /// ```compile_fail,E0080
 /// use tailq::{Link, TailQueue};
@@ -256,7 +286,7 @@ pub unsafe trait Payload: Adapter {
 ///
 /// A packed node, whose link could be unaligned, fails to compile too:
 ///
-/// ```compile_fail,E0793
+/// ```compile_fail,E0080
 /// use tailq::Link;
 ///
 /// #[repr(C, packed)]
@@ -269,9 +299,66 @@ pub unsafe trait Payload: Adapter {
 /// ```
 #[macro_export]
 macro_rules! adapter {
+    ($(#[$attr:meta])* $vis:vis $name:ident $($rest:tt)*) => {
+        $crate::__adapter!(@start [$(#[$attr])* $vis $name] $($rest)*);
+    };
+}
+
+/// The rules behind [`adapter!`]: it reads the adapter's parameters one at
+/// a time, then declares the adapter and implements its traits.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __adapter {
+    (@start $head:tt = $($rest:tt)*) => {
+        $crate::__adapter!(@define $head [] [] = $($rest)*);
+    };
+    (@start $head:tt < $($rest:tt)*) => {
+        $crate::__adapter!(@params $head [] [] $($rest)*);
+    };
+    (@params $head:tt [$($decl:tt)*] [$($arg:tt)*] > $($rest:tt)*) => {
+        $crate::__adapter!(@define $head [$($decl)*] [$($arg)*] $($rest)*);
+    };
+    (@params $head:tt [$($decl:tt)*] [$($arg:tt)*] , $($rest:tt)*) => {
+        $crate::__adapter!(@params $head [$($decl)*] [$($arg)*] $($rest)*);
+    };
     (
-        $(#[$attr:meta])*
-        $vis:vis $name:ident $(<$($param:ident),+ $(,)?>)?
+        @params $head:tt [$($decl:tt)*] [$($arg:tt)*]
+            $lifetime:lifetime $($rest:tt)*
+    ) => {
+        $crate::__adapter!(
+            @params $head [$($decl)* $lifetime,] [$($arg)* $lifetime,]
+                $($rest)*
+        );
+    };
+    (
+        @params $head:tt [$($decl:tt)*] [$($arg:tt)*]
+            const $const:ident : $ty:ty , $($rest:tt)*
+    ) => {
+        $crate::__adapter!(
+            @params $head [$($decl)* const $const: $ty,] [$($arg)* $const,]
+                $($rest)*
+        );
+    };
+    (
+        @params $head:tt [$($decl:tt)*] [$($arg:tt)*]
+            const $const:ident : $ty:ty > $($rest:tt)*
+    ) => {
+        $crate::__adapter!(
+            @params $head [$($decl)* const $const: $ty,] [$($arg)* $const,]
+                > $($rest)*
+        );
+    };
+    (
+        @params $head:tt [$($decl:tt)*] [$($arg:tt)*]
+            $param:ident $($rest:tt)*
+    ) => {
+        $crate::__adapter!(
+            @params $head [$($decl)* $param,] [$($arg)* $param,] $($rest)*
+        );
+    };
+    (
+        @define [$(#[$attr:meta])* $vis:vis $name:ident]
+            [$($decl:tt)*] [$($arg:tt)*]
             = $node:ty {
                 $($field:ident).+
                 $(, mut $($payload:ident).+ : $payload_ty:ty)?
@@ -279,106 +366,108 @@ macro_rules! adapter {
             }
             $(where $($bound:tt)+)?
     ) => {
+        // The bounds sit on the type too, which ends at them: a brace
+        // group among them fails to parse, rather than closing a header
+        // below and taking the place of its body.
         $(#[$attr])*
         #[derive(Clone, Copy, Debug)]
-        $vis struct $name $(<$($param),+>)?(
+        $vis struct $name<$($decl)*>(
             ::core::convert::Infallible,
-            ::core::marker::PhantomData<fn() -> ($($($param,)+)?)>,
-        );
+            ::core::marker::PhantomData<fn() -> $node>,
+        )
+        $(where $($bound)+)?;
 
-        $crate::adapter!(
-            @link $name [$($($param),+)?] [$($($bound)+)?] $node,
-                [$($field).+]
-        );
-        $crate::adapter!(
-            @payload $name [$($($param),+)?] [$($($bound)+)?] $node,
-                [$($field).+], [$($($payload).+ : $payload_ty)?]
-        );
-    };
-    (
-        @link $name:ident [$($param:ident),*] [$($bound:tt)*] $node:ty,
-            [$($field:ident).+]
-    ) => {
-        // SAFETY: `link` projects the field, which the raw place proves is
-        // a `Link` and the reference proves is aligned, from the pointer it
-        // is given, and `node` steps back by the field's offset.
-        unsafe impl<$($param),*> $crate::Adapter for $name<$($param),*>
-        where
-            $($bound)*
+        // A lifetime parameter shows once in these headers.
+        #[allow(single_use_lifetimes)]
+        impl<$($decl)*> $crate::__private::Sealed for $name<$($arg)*>
+        $(where $($bound)+)?
+        {
+        }
+
+        // SAFETY: `OFFSET` is the offset of the field, which the raw place
+        // proves is a `Link` and the assertion proves is aligned.
+        unsafe impl<$($decl)*> $crate::Adapter for $name<$($arg)*>
+        $(where $($bound)+)?
         {
             type Node = $node;
 
-            #[inline]
-            unsafe fn link(
-                node: ::core::ptr::NonNull<$node>,
-            ) -> ::core::ptr::NonNull<$crate::Link> {
-                // A reference to the field: rejects a packed node.
-                let _: fn(&$node) -> &$crate::Link = |node| &node.$($field).+;
+            const OFFSET: usize = {
+                let mut slot = ::core::mem::MaybeUninit::<$node>::uninit();
+                let node = slot.as_mut_ptr();
                 // A raw place, which is never deref-coerced: rejects a
                 // field that only derefs to a link.
-                // SAFETY: the node is live.
-                let link: *mut $crate::Link =
-                    unsafe { &raw mut (*node.as_ptr()).$($field).+ };
-                // SAFETY: a field of a live node is not null.
-                unsafe { ::core::ptr::NonNull::new_unchecked(link) }
-            }
-
-            #[inline]
-            unsafe fn node(
-                link: ::core::ptr::NonNull<$crate::Link>,
-            ) -> ::core::ptr::NonNull<$node> {
-                // SAFETY: the link lies this far into its live node.
-                unsafe {
-                    link.byte_sub(::core::mem::offset_of!($node, $($field).+))
-                        .cast()
-                }
-            }
+                // SAFETY: the place is a field of the slot, and nothing
+                // reads it.
+                let _: *mut $crate::Link =
+                    unsafe { &raw mut (*node).$($field).+ };
+                let offset = ::core::mem::offset_of!($node, $($field).+);
+                // Aligned in every node: rejects a packed node that could
+                // leave the link unaligned.
+                ::core::assert!(
+                    $crate::__private::aligned::<$node, $crate::Link>(offset),
+                    "tailq::adapter!: the link is not aligned in every node",
+                );
+                offset
+            };
         }
+
+        $crate::__adapter!(@check [$($decl)*] $name);
+        $crate::__adapter!(
+            @payload $name [$($decl)*] [$($arg)*] [$($($bound)+)?] $node,
+                [$($($payload).+ : $payload_ty)?]
+        );
     };
+    // An adapter with no parameters is checked where it is declared; a
+    // generic one where it is first used.
+    (@check [] $name:ident) => {
+        const _: usize = <$name as $crate::Adapter>::OFFSET;
+    };
+    (@check [$($decl:tt)+] $name:ident) => {};
+    (@check_payload [] $name:ident) => {
+        const _: () = $crate::__private::check_payload::<$name>();
+    };
+    (@check_payload [$($decl:tt)+] $name:ident) => {};
     (
-        @payload $name:ident [$($param:ident),*] [$($bound:tt)*] $node:ty,
-            [$($field:ident).+], []
+        @payload $name:ident [$($decl:tt)*] [$($arg:tt)*] [$($bound:tt)*]
+            $node:ty, []
     ) => {};
     (
-        @payload $name:ident [$($param:ident),*] [$($bound:tt)*] $node:ty,
-            [$($field:ident).+], [$($payload:ident).+ : $payload_ty:ty]
+        @payload $name:ident [$($decl:tt)*] [$($arg:tt)*] [$($bound:tt)*]
+            $node:ty, [$($payload:ident).+ : $payload_ty:ty]
     ) => {
-        // SAFETY: `payload` projects the field, which the raw place proves
-        // is a `$payload_ty` and the reference proves is aligned, from the
-        // pointer it is given, and the assertion proves it lies apart from
-        // the link.
-        unsafe impl<$($param),*> $crate::Payload for $name<$($param),*>
+        // SAFETY: `PAYLOAD_OFFSET` is the offset of the field of the
+        // adapter's node, which the raw place proves is a `$payload_ty` and
+        // the assertion proves is aligned; the queue checks that it lies
+        // apart from the link.
+        #[allow(single_use_lifetimes)]
+        unsafe impl<$($decl)*> $crate::Payload for $name<$($arg)*>
         where
             $($bound)*
         {
             type Payload = $payload_ty;
 
-            #[inline]
-            unsafe fn payload(
-                node: ::core::ptr::NonNull<$node>,
-            ) -> ::core::ptr::NonNull<$payload_ty> {
-                const {
-                    let link = ::core::mem::offset_of!($node, $($field).+);
-                    let payload =
-                        ::core::mem::offset_of!($node, $($payload).+);
-                    ::core::assert!(
-                        payload + ::core::mem::size_of::<$payload_ty>() <= link
-                            || link + ::core::mem::size_of::<$crate::Link>()
-                                <= payload,
-                        "tailq::adapter!: the payload overlaps the link",
-                    );
-                }
-                // A reference to the field: rejects a packed node.
-                let _: fn(&$node) -> &$payload_ty =
-                    |node| &node.$($payload).+;
+            const PAYLOAD_OFFSET: usize = {
+                let mut slot = ::core::mem::MaybeUninit::<$node>::uninit();
+                let node = slot.as_mut_ptr();
+                // The adapter's own node.
+                let _: *mut <Self as $crate::Adapter>::Node = node;
                 // A raw place, which is never deref-coerced: proves the
                 // field's type.
-                // SAFETY: the node is live.
-                let payload: *mut $payload_ty =
-                    unsafe { &raw mut (*node.as_ptr()).$($payload).+ };
-                // SAFETY: a field of a live node is not null.
-                unsafe { ::core::ptr::NonNull::new_unchecked(payload) }
-            }
+                // SAFETY: the place is a field of the slot, and nothing
+                // reads it.
+                let _: *mut $payload_ty =
+                    unsafe { &raw mut (*node).$($payload).+ };
+                let offset = ::core::mem::offset_of!($node, $($payload).+);
+                // Aligned in every node: rejects a packed field that could
+                // leave the payload unaligned.
+                ::core::assert!(
+                    $crate::__private::aligned::<$node, $payload_ty>(offset),
+                    "tailq::adapter!: the payload is not aligned in every node",
+                );
+                offset
+            };
         }
+
+        $crate::__adapter!(@check_payload [$($decl)*] $name);
     };
 }

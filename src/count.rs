@@ -39,7 +39,7 @@ impl Count for Uncounted {}
     unnameable_types,
     reason = "a supertrait no other crate can name is what seals `Count`"
 )]
-pub trait Sealed: Sized {
+pub trait Sealed: Sized + Copy {
     /// The length of an empty queue, all zero bytes.
     const ZERO: Self;
 
@@ -51,6 +51,9 @@ pub trait Sealed: Sized {
 
     /// Returns the length and sets it to zero.
     fn take(&mut self) -> usize;
+
+    /// Returns the exact length, if kept.
+    fn exact(self) -> Option<usize>;
 }
 
 impl Sealed for Counted {
@@ -70,6 +73,11 @@ impl Sealed for Counted {
     fn take(&mut self) -> usize {
         mem::take(&mut self.0)
     }
+
+    #[inline]
+    fn exact(self) -> Option<usize> {
+        Some(self.0)
+    }
 }
 
 impl Sealed for Uncounted {
@@ -84,5 +92,10 @@ impl Sealed for Uncounted {
     #[inline]
     fn take(&mut self) -> usize {
         0
+    }
+
+    #[inline]
+    fn exact(self) -> Option<usize> {
+        None
     }
 }

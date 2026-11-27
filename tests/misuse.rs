@@ -15,7 +15,7 @@
 use core::panic::AssertUnwindSafe;
 use core::ptr::{self, NonNull};
 use std::panic::catch_unwind;
-use tailq::{Link, TailQueue};
+use tailq::{Counted, Link, TailQueue};
 
 /// A node on one queue.
 struct Node {
@@ -251,4 +251,87 @@ fn a_caught_check_leaves_the_queue_as_it_was() {
     let keys: Vec<u32> = queue.iter().map(|node| node.key).collect();
     let keys_rev: Vec<u32> = queue.iter().rev().map(|node| node.key).collect();
     assert_eq!((keys, keys_rev), (vec![0, 1, 2], vec![2, 1, 0]));
+}
+
+/// A queue of three nodes, `0` to `2`, and another of three, `3` to `5`,
+/// counted, so that a removal through the wrong one would show in a
+/// length.
+fn two_queues(nodes: &Nodes) -> (CountedQueue, CountedQueue) {
+    let mut one = CountedQueue::new();
+    let mut two = CountedQueue::new();
+    // SAFETY: the nodes are live and outlive both queues, and each is on
+    // no queue when pushed.
+    unsafe {
+        for i in 0..3 {
+            one.push_back_ptr(nodes.at(i));
+            two.push_back_ptr(nodes.at(i.wrapping_add(3)));
+        }
+    }
+    (one, two)
+}
+
+/// A counted queue of nodes.
+type CountedQueue = TailQueue<'static, NodeLink, Counted>;
+
+#[test]
+#[should_panic(expected = "tail queue: the link is not on this queue")]
+fn a_middle_node_of_another_queue_is_not_removed() {
+    let nodes = Nodes::new(6);
+    let (mut one, _two) = two_queues(&nodes);
+    // SAFETY: the node is live; that it is on `two` is the misuse.
+    unsafe { one.remove_ptr(nodes.at(4)) };
+}
+
+#[test]
+#[should_panic(expected = "tail queue: the link is not on this queue")]
+fn a_middle_node_of_another_queue_is_not_removed_through_an_empty_one() {
+    let nodes = Nodes::new(6);
+    let (_one, _two) = two_queues(&nodes);
+    let mut empty = Queue::new();
+    // SAFETY: as above.
+    unsafe { empty.remove_ptr(nodes.at(1)) };
+}
+
+#[test]
+#[should_panic(expected = "tail queue: the link is not on this queue")]
+fn no_mutable_cursor_rests_on_a_middle_node_of_another_queue() {
+    let nodes = Nodes::new(6);
+    let (mut one, _two) = two_queues(&nodes);
+    // SAFETY: as above; through the cursor, removing the other queue's
+    // last node next would have set this queue's last into it.
+    let cursor = unsafe { one.cursor_mut_from_ptr(nodes.at(4)) };
+    assert!(cursor.current().is_some(), "unreachable");
+}
+
+#[test]
+#[should_panic(expected = "tail queue: the link is not on this queue")]
+fn no_cursor_rests_on_a_middle_node_of_another_queue() {
+    let nodes = Nodes::new(6);
+    let (one, _two) = two_queues(&nodes);
+    // SAFETY: as above.
+    let cursor = unsafe { one.cursor_from_ptr(nodes.at(4)) };
+    assert!(cursor.current().is_some(), "unreachable");
+}
+
+#[test]
+fn a_caught_membership_check_leaves_both_queues_as_they_were() {
+    let nodes = Nodes::new(6);
+    let (mut one, two) = two_queues(&nodes);
+    let caught = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: as in `a_middle_node_of_another_queue_is_not_removed`.
+        unsafe { one.remove_ptr(nodes.at(4)) };
+    }));
+    assert!(caught.is_err(), "the check fires");
+    let both = [&one, &two].map(|queue| {
+        let keys: Vec<u32> = queue.iter().map(|node| node.key).collect();
+        let back: Vec<u32> = queue.iter().rev().map(|node| node.key).collect();
+        (keys, back, queue.len())
+    });
+    assert_eq!(
+        both,
+        [
+            (vec![0, 1, 2], vec![2, 1, 0], 3),
+            (vec![3, 4, 5], vec![5, 4, 3], 3)
+        ]
+    );
 }

@@ -9,11 +9,10 @@
     reason = "an integration test crate is itself the test module"
 )]
 
-use core::convert::Infallible;
 use core::marker::PhantomData;
-use core::mem::{offset_of, size_of, swap, take, zeroed};
+use core::mem::{size_of, swap, take, zeroed};
 use core::ptr::NonNull;
-use tailq::{Adapter, Counted, Link, TailQueue};
+use tailq::{Counted, Link, TailQueue};
 
 /// A node on one queue.
 struct Node {
@@ -460,43 +459,6 @@ struct Thread<P: Platform> {
     sched: Sched,
 }
 
-/// Links a generic thread through its scheduling record, by hand.
-struct ThreadLink<P>(Infallible, PhantomData<P>);
-
-// SAFETY: both directions step by the offset of `sched.link`, a `Link`,
-// from the pointer they are given.
-unsafe impl<P: Platform> Adapter for ThreadLink<P> {
-    type Node = Thread<P>;
-
-    unsafe fn link(node: NonNull<Thread<P>>) -> NonNull<Link> {
-        // SAFETY: `node` points at a live thread.
-        unsafe { NonNull::new_unchecked(&raw mut (*node.as_ptr()).sched.link) }
-    }
-
-    unsafe fn node(link: NonNull<Link>) -> NonNull<Thread<P>> {
-        // SAFETY: `link` is the link of a live thread.
-        unsafe { link.byte_sub(offset_of!(Thread<P>, sched.link)).cast() }
-    }
-}
-
-#[test]
-fn hand_written_adapter_links_a_generic_node() {
-    let mut threads: Vec<Thread<Pc>> = (0..3)
-        .map(|id| Thread {
-            id,
-            platform: PhantomData,
-            sched: Sched { link: Link::new() },
-        })
-        .collect();
-    let mut queue = TailQueue::<ThreadLink<Pc>>::new();
-    for thread in &mut threads {
-        queue.push_front(thread);
-    }
-    let ids: Vec<u32> = queue.iter().map(|thread| thread.id).collect();
-    assert_eq!(ids, [2, 1, 0]);
-    assert_eq!(Pc::NAME, "pc");
-}
-
 tailq::adapter!(
     SchedLink<P> = Thread<P> { sched.link } where P: Platform
 );
@@ -516,6 +478,7 @@ fn adapter_links_a_generic_node_through_a_nested_field() {
     }
     let ids: Vec<u32> = queue.iter().rev().map(|thread| thread.id).collect();
     assert_eq!(ids, [2, 1, 0]);
+    assert_eq!(Pc::NAME, "pc");
 }
 
 #[test]
@@ -826,7 +789,7 @@ fn iterators_and_cursors_copy_their_position() {
     let queue: Queue<'_> = nodes.iter_mut().collect();
 
     let mut iter = queue.iter();
-    assert_eq!(iter.size_hint(), (1, None));
+    assert_eq!(iter.size_hint(), (2, None));
     assert_eq!(iter.next().map(|node| node.key), Some(0));
     let pairs: Vec<(u32, u32)> = iter
         .clone()
@@ -838,7 +801,7 @@ fn iterators_and_cursors_copy_their_position() {
     assert_eq!(iter.next_back().map(|node| node.key), Some(3));
     assert_eq!(iter.clone().last().map(|node| node.key), Some(2));
     assert_eq!(iter.by_ref().count(), 2);
-    assert_eq!(iter.size_hint(), (0, None));
+    assert_eq!(iter.size_hint(), (0, Some(0)));
     assert!(iter.next().is_none() && iter.next_back().is_none());
     assert_eq!(queue.iter_ptr().last(), queue.back_ptr());
 

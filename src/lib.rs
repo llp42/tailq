@@ -68,12 +68,15 @@
 //! [`Link::is_linked`] reads; a queue that is forgotten, or overwritten
 //! without being dropped, leaves its nodes marked as linked.  Debug builds
 //! check, before an operation writes anything, that a link's neighbours
-//! point back at it and that a link at either end is this queue's, and
-//! that a pushed link is on no queue; they also fill a leaving link's
-//! forward word with an address no link can have.
+//! point back at it, that a link at either end is this queue's, that a
+//! node named by address is on this queue, and that a pushed link is on
+//! no queue; they also fill a leaving link's forward word with an address
+//! no link can have.
 
 #![no_std]
 
+#[doc(hidden)]
+pub mod __private;
 mod adapter;
 #[cfg(doctest)]
 mod compile_fail;
@@ -81,6 +84,7 @@ mod count;
 mod cursor;
 
 pub use adapter::{Adapter, Payload};
+use adapter::{link_of, node_of, payload_of};
 pub use count::{Count, Counted, Uncounted};
 pub use cursor::{Cursor, CursorMut, Iter, IterMut, IterPtr};
 
@@ -98,6 +102,24 @@ use core::ptr::{self, NonNull};
 // SAFETY: `usize::MAX` is not zero.
 const NOWHERE: NonNull<Link> =
     unsafe { NonNull::new_unchecked(ptr::without_provenance_mut(usize::MAX)) };
+
+/// Returns whether `link` is `at`.  It compares addresses, as `==` on
+/// `Option<NonNull<Link>>` does in optimised builds, but costs no call in
+/// unoptimised ones, where the derived `PartialEq` takes some fifty
+/// instructions.
+#[expect(
+    clippy::inline_always,
+    clippy::option_if_let_else,
+    reason = "unoptimised builds run the debug checks through it, where a \
+              combinator or a call would cost more than the compare"
+)]
+#[inline(always)]
+pub(crate) fn is(slot: Option<NonNull<Link>>, at: NonNull<Link>) -> bool {
+    match slot {
+        Some(link) => link.as_ptr() == at.as_ptr(),
+        None => false,
+    }
+}
 
 /// The field a node embeds to join one [`TailQueue`].
 ///
@@ -143,7 +165,11 @@ impl Link {
     unsafe fn prev_link(&self) -> Option<NonNull<Self>> {
         // SAFETY: a link on a queue has a `prev`.
         let prev = unsafe { self.prev.get().unwrap_unchecked() };
-        (prev != NOWHERE).then_some(prev)
+        if prev.as_ptr() == NOWHERE.as_ptr() {
+            None
+        } else {
+            Some(prev)
+        }
     }
 }
 
@@ -173,9 +199,16 @@ const _: () = assert!(
 /// keeps its length when `C` is [`Counted`].
 ///
 /// Nothing points into a head, so it moves freely, full or empty.  A
-/// head of all zero bytes is an empty queue.  Dropping a head marks the
-/// links of the nodes still on it as on no queue, so those nodes must be
-/// live then.
+/// head of all zero bytes is an empty queue.  It is `repr(C)`: the first
+/// node's link, the last node's, then the length, a word when `Counted`
+/// and nothing otherwise, so two words or three.
+///
+/// Dropping a head marks the links of the nodes still on it as on no
+/// queue, so those nodes must be live then; assigning over a head drops
+/// the old one too.  A head whose nodes may be gone or overwritten
+/// wholesale when it goes belongs in a [`ManuallyDrop`](core::mem::ManuallyDrop),
+/// which leaves them marked as linked.
+#[repr(C)]
 pub struct TailQueue<'nodes, A: Adapter, C: Count = Uncounted> {
     /// The first node's link, `None` when empty.
     first: Option<NonNull<Link>>,
@@ -239,7 +272,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     #[inline]
     pub fn front_ptr(&self) -> Option<NonNull<A::Node>> {
         // SAFETY: a node stays live while it is on the queue.
-        self.first.map(|link| unsafe { A::node(link) })
+        self.first.map(|link| unsafe { node_of::<A>(link) })
     }
 
     /// Returns the pointer the last node was pushed with, or `None` when
@@ -248,14 +281,16 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     #[inline]
     pub fn back_ptr(&self) -> Option<NonNull<A::Node>> {
         // SAFETY: a node stays live while it is on the queue.
-        self.last.map(|link| unsafe { A::node(link) })
+        self.last.map(|link| unsafe { node_of::<A>(link) })
     }
 
     /// Returns an iterator over the nodes, front to back; reversed, back
-    /// to front.
+    /// to front.  To write a node found by a walk, walk
+    /// [`iter_ptr`](Self::iter_ptr) instead: a pointer made from a
+    /// `&A::Node` may not write the node.
     #[must_use]
     #[inline]
-    pub const fn iter(&self) -> Iter<'_, A> {
+    pub const fn iter(&self) -> Iter<'_, A, C> {
         Iter::new(self.iter_ptr())
     }
 
@@ -264,8 +299,8 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// [`front_ptr`](Self::front_ptr) returns it.
     #[must_use]
     #[inline]
-    pub const fn iter_ptr(&self) -> IterPtr<'_, A> {
-        IterPtr::new(self.first, self.last)
+    pub const fn iter_ptr(&self) -> IterPtr<'_, A, C> {
+        IterPtr::new(self.first, self.last, self.count)
     }
 
     /// Returns a cursor at the first node, or at the ghost when empty.
@@ -286,12 +321,15 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// # Panics
     ///
-    /// In debug builds, when the node's link is on no queue, or when it is
-    /// the first link of a queue other than this one.
+    /// In debug builds, when the node's link is on no queue or on another
+    /// queue, which costs O(min(i, n - i)) to tell for the `i`th of `n`
+    /// nodes there.
     ///
     /// # Safety
     ///
-    /// `node` must be on this queue.
+    /// `node` must be on this queue, and valid for reads of its link.  The
+    /// cursor then reaches the node through the pointer it was pushed
+    /// with, not through `node`.
     #[must_use]
     #[inline]
     pub unsafe fn cursor_from_ptr(
@@ -299,7 +337,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         node: NonNull<A::Node>,
     ) -> Cursor<'_, 'nodes, A, C> {
         // SAFETY: the caller puts the node on this queue.
-        let current = unsafe { self.linked(A::link(node)) };
+        let current = unsafe { self.linked(link_of::<A>(node)) };
         Cursor::new(self, Some(current))
     }
 
@@ -325,12 +363,15 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// # Panics
     ///
-    /// In debug builds, when the node's link is on no queue, or when it is
-    /// the first link of a queue other than this one.
+    /// In debug builds, when the node's link is on no queue or on another
+    /// queue, which costs O(min(i, n - i)) to tell for the `i`th of `n`
+    /// nodes there.
     ///
     /// # Safety
     ///
-    /// `node` must be on this queue.
+    /// `node` must be on this queue, and valid for reads of its link.  The
+    /// cursor then reaches the node through the pointer it was pushed
+    /// with, not through `node`.
     #[must_use]
     #[inline]
     pub unsafe fn cursor_mut_from_ptr(
@@ -338,7 +379,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         node: NonNull<A::Node>,
     ) -> CursorMut<'_, 'nodes, A, C> {
         // SAFETY: the caller puts the node on this queue.
-        let current = unsafe { self.linked(A::link(node)) };
+        let current = unsafe { self.linked(link_of::<A>(node)) };
         CursorMut::new(self, Some(current))
     }
 
@@ -396,14 +437,15 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     #[inline]
     pub unsafe fn push_front_ptr(&mut self, node: NonNull<A::Node>) {
         // SAFETY: the caller keeps the push contract.
-        let link = unsafe { A::link(node) };
+        let link = unsafe { link_of::<A>(node) };
         // SAFETY: the node is live.
         let new = unsafe { link.as_ref() };
         debug_assert!(
             !new.is_linked(),
             "tail queue: the link is already on a queue",
         );
-        let next = self.first.replace(link);
+        let next = self.first;
+        self.first = Some(link);
         new.next.set(next);
         new.prev.set(Some(NOWHERE));
         match next {
@@ -427,14 +469,15 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     #[inline]
     pub unsafe fn push_back_ptr(&mut self, node: NonNull<A::Node>) {
         // SAFETY: the caller keeps the push contract.
-        let link = unsafe { A::link(node) };
+        let link = unsafe { link_of::<A>(node) };
         // SAFETY: the node is live.
         let new = unsafe { link.as_ref() };
         debug_assert!(
             !new.is_linked(),
             "tail queue: the link is already on a queue",
         );
-        let before = self.last.replace(link);
+        let before = self.last;
+        self.last = Some(link);
         new.next.set(None);
         new.prev.set(Some(before.unwrap_or(NOWHERE)));
         match before {
@@ -499,7 +542,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         self.count.sub_one();
         release(link);
         // SAFETY: the node is live.
-        Some(unsafe { A::node(first) })
+        Some(unsafe { node_of::<A>(first) })
     }
 
     /// Unlinks the last node and returns the pointer it was pushed with,
@@ -528,7 +571,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         self.count.sub_one();
         release(link);
         // SAFETY: the node is live.
-        Some(unsafe { A::node(last) })
+        Some(unsafe { node_of::<A>(last) })
     }
 
     /// Unlinks the node at `node` in O(1).  The node is not handed back:
@@ -539,17 +582,77 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// # Panics
     ///
-    /// In debug builds, when the node's link is on no queue, when it is
-    /// not consistent with its neighbours, or when it is at an end of a
-    /// queue other than this one.
+    /// In debug builds, when the node's link is on no queue or on another
+    /// queue, or when it is not consistent with its neighbours.  Telling
+    /// another queue apart walks from the node toward the nearer end, so
+    /// it costs O(min(i, n - i)) for the `i`th of `n` nodes there.
     ///
     /// # Safety
     ///
-    /// `node` must be on this queue.
+    /// `node` must be on this queue, and valid for reads and writes of its
+    /// link, as the pointer it was pushed with, or one the queue returned,
+    /// is.
     #[inline]
     pub unsafe fn remove_ptr(&mut self, node: NonNull<A::Node>) {
         // SAFETY: the caller puts the node on this queue.
-        unsafe { self.unlink(A::link(node)) };
+        unsafe {
+            let link = link_of::<A>(node);
+            self.check_member(link);
+            self.unlink(link);
+        }
+    }
+
+    /// Returns whether the node at `node` is on this queue, in O(n).  It
+    /// compares addresses and never reads through `node`, so any pointer
+    /// will do.
+    #[must_use]
+    #[inline]
+    pub fn contains_ptr(&self, node: NonNull<A::Node>) -> bool {
+        self.find(node).is_some()
+    }
+
+    /// Returns a cursor at the node at `node`, or `None` when it is not on
+    /// this queue, in O(n).  It compares addresses, as
+    /// [`contains_ptr`](Self::contains_ptr) does.
+    #[must_use]
+    #[inline]
+    pub fn cursor_find_ptr(
+        &self,
+        node: NonNull<A::Node>,
+    ) -> Option<Cursor<'_, 'nodes, A, C>> {
+        let found = self.find(node)?;
+        Some(Cursor::new(self, Some(found)))
+    }
+
+    /// Returns a mutable cursor at the node at `node`, or `None` when it is
+    /// not on this queue, in O(n).  It compares addresses, as
+    /// [`contains_ptr`](Self::contains_ptr) does, so it is the checked way
+    /// to remove a node known by address:
+    /// `queue.cursor_mut_find_ptr(node)?.remove_current_ptr()`.
+    #[must_use]
+    #[inline]
+    pub fn cursor_mut_find_ptr(
+        &mut self,
+        node: NonNull<A::Node>,
+    ) -> Option<CursorMut<'_, 'nodes, A, C>> {
+        let found = self.find(node)?;
+        Some(CursorMut::new(self, Some(found)))
+    }
+
+    /// Returns the queue's own pointer to the link of the node at `node`,
+    /// or `None` when it is not on this queue.
+    #[inline]
+    fn find(&self, node: NonNull<A::Node>) -> Option<NonNull<Link>> {
+        let mut at = self.first;
+        while let Some(link) = at {
+            // SAFETY: a node stays live while it is on the queue.
+            if unsafe { node_of::<A>(link) } == node {
+                return Some(link);
+            }
+            // SAFETY: as above.
+            at = unsafe { link.as_ref() }.next.get();
+        }
+        None
     }
 
     /// Moves every node of `other` to the back of this queue in O(1),
@@ -579,8 +682,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// # Panics
     ///
-    /// In debug builds, when `at` is on no queue, or when it is the first
-    /// link of another queue.
+    /// In debug builds, when `at` is on no queue or on another queue.
     ///
     /// # Safety
     ///
@@ -588,16 +690,59 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     #[inline]
     unsafe fn linked(&self, at: NonNull<Link>) -> NonNull<Link> {
         // SAFETY: the node is live.
+        unsafe { self.check_member(at) };
+        // SAFETY: as above.
         let link = unsafe { at.as_ref() };
-        debug_assert!(link.is_linked(), "tail queue: the link is on no queue");
-        // SAFETY: the link is on a queue, and the previous node is live.
+        // SAFETY: the link is on this queue, and the previous node is live.
         let own = unsafe { link.prev_link() }
             .map_or(self.first, |prev| unsafe { prev.as_ref() }.next.get());
-        debug_assert!(
-            own == Some(at),
-            "tail queue: the link is not on this queue",
-        );
         own.unwrap_or(at)
+    }
+
+    /// Checks, in debug builds, that the link `at` is on this queue: walks
+    /// from it toward both ends at once, and checks that the end it reaches
+    /// first is this queue's.  It costs O(min(i, n - i)) for the `i`th of
+    /// `n` nodes, and nothing in release builds.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when `at` is on no queue or on another queue.
+    ///
+    /// # Safety
+    ///
+    /// `at` must be the link of a live node, on a queue of live nodes when
+    /// it is on one.
+    #[inline]
+    unsafe fn check_member(&self, at: NonNull<Link>) {
+        #[cfg(debug_assertions)]
+        {
+            // SAFETY: the node is live.
+            let linked = unsafe { at.as_ref() }.is_linked();
+            assert!(linked, "tail queue: the link is on no queue");
+            let (mut back, mut ahead) = (at, at);
+            loop {
+                // SAFETY: the links walked are on one queue of live nodes.
+                let Some(prev) = (unsafe { back.as_ref().prev_link() }) else {
+                    assert!(
+                        is(self.first, back),
+                        "tail queue: the link is not on this queue",
+                    );
+                    break;
+                };
+                back = prev;
+                // SAFETY: as above.
+                let Some(next) = unsafe { ahead.as_ref() }.next.get() else {
+                    assert!(
+                        is(self.last, ahead),
+                        "tail queue: the link is not on this queue",
+                    );
+                    break;
+                };
+                ahead = next;
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        let _: NonNull<Link> = at;
     }
 
     /// Checks, in debug builds, that the link `at` is on a queue, that its
@@ -621,11 +766,11 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
             match link.next.get() {
                 // SAFETY: a link on a queue has a live next node.
                 Some(next) => assert!(
-                    unsafe { next.as_ref() }.prev.get() == Some(at),
+                    is(unsafe { next.as_ref() }.prev.get(), at),
                     "tail queue: the next link does not point back",
                 ),
                 None => assert!(
-                    self.last == Some(at),
+                    is(self.last, at),
                     "tail queue: the link is not on this queue",
                 ),
             }
@@ -633,11 +778,11 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
             match unsafe { link.prev_link() } {
                 // SAFETY: a link on a queue has a live previous node.
                 Some(prev) => assert!(
-                    unsafe { prev.as_ref() }.next.get() == Some(at),
+                    is(unsafe { prev.as_ref() }.next.get(), at),
                     "tail queue: the previous link does not point at this one",
                 ),
                 None => assert!(
-                    self.first == Some(at),
+                    is(self.first, at),
                     "tail queue: the link is not on this queue",
                 ),
             }
@@ -761,6 +906,9 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         // SAFETY: as above.
         let link = unsafe { at.as_ref() };
         let next = link.next.get();
+        // Read once: the stores below may alias it as far as the compiler
+        // knows, so a second `link.prev.get()` would reload it.
+        let back = link.prev.get();
         // SAFETY: the link is on this queue.
         let before = unsafe { link.prev_link() };
         match before {
@@ -770,7 +918,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         }
         match next {
             // SAFETY: the next node is live.
-            Some(after) => unsafe { after.as_ref() }.prev.set(link.prev.get()),
+            Some(after) => unsafe { after.as_ref() }.prev.set(back),
             None => self.last = before,
         }
         self.count.sub_one();
@@ -799,6 +947,9 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
             "tail queue: the link is already on a queue",
         );
         let next = old.next.get();
+        // SAFETY: `at` is on this queue.  Read before any store, which the
+        // compiler cannot tell apart from `old.prev`.
+        let before = unsafe { old.prev_link() };
         new.next.set(next);
         new.prev.set(old.prev.get());
         match next {
@@ -806,10 +957,9 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
             Some(after) => unsafe { after.as_ref() }.prev.set(Some(link)),
             None => self.last = Some(link),
         }
-        // SAFETY: `at` is on this queue.
-        match unsafe { old.prev_link() } {
+        match before {
             // SAFETY: the previous node is live.
-            Some(before) => unsafe { before.as_ref() }.next.set(Some(link)),
+            Some(prev) => unsafe { prev.as_ref() }.next.set(Some(link)),
             None => self.first = Some(link),
         }
         release(old);
@@ -839,7 +989,7 @@ impl<A: Payload, C: Count> TailQueue<'_, A, C> {
         // lies apart from its link, and the queue lends it only while
         // borrowed mutably.
         self.first
-            .map(|link| unsafe { A::payload(A::node(link)).as_mut() })
+            .map(|link| unsafe { payload_of::<A>(node_of::<A>(link)).as_mut() })
     }
 
     /// Returns the payload of the last node, or `None` when empty.
@@ -848,15 +998,15 @@ impl<A: Payload, C: Count> TailQueue<'_, A, C> {
     pub fn back_mut(&mut self) -> Option<&mut A::Payload> {
         // SAFETY: as for `front_mut`.
         self.last
-            .map(|link| unsafe { A::payload(A::node(link)).as_mut() })
+            .map(|link| unsafe { payload_of::<A>(node_of::<A>(link)).as_mut() })
     }
 
     /// Returns an iterator over the nodes' payloads, front to back;
     /// reversed, back to front.
     #[must_use]
     #[inline]
-    pub const fn iter_mut(&mut self) -> IterMut<'_, A> {
-        IterMut::new(IterPtr::new(self.first, self.last))
+    pub const fn iter_mut(&mut self) -> IterMut<'_, A, C> {
+        IterMut::new(IterPtr::new(self.first, self.last, self.count))
     }
 }
 
@@ -924,7 +1074,7 @@ impl<A: Adapter, C: Count> Drop for TailQueue<'_, A, C> {
 
 impl<'head, A: Adapter, C: Count> IntoIterator for &'head TailQueue<'_, A, C> {
     type Item = &'head A::Node;
-    type IntoIter = Iter<'head, A>;
+    type IntoIter = Iter<'head, A, C>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
@@ -936,7 +1086,7 @@ impl<'head, A: Payload, C: Count> IntoIterator
     for &'head mut TailQueue<'_, A, C>
 {
     type Item = &'head mut A::Payload;
-    type IntoIter = IterMut<'head, A>;
+    type IntoIter = IterMut<'head, A, C>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {

@@ -145,7 +145,9 @@ fn check_meeting<A, C, K, F>(
     let mut iter = queue.iter();
     let (mut low, mut high) = (0, model.len());
     while low < high {
-        assert_eq!(iter.size_hint().0, 1);
+        let (at_least, at_most) = iter.size_hint();
+        assert!(at_least >= 1 && at_least <= high - low);
+        assert!(at_most.is_none_or(|most| most >= high - low));
         if rng.coin() {
             assert_eq!(iter.next().map(&key), model.get(low).copied());
             low += 1;
@@ -154,7 +156,7 @@ fn check_meeting<A, C, K, F>(
             assert_eq!(iter.next_back().map(&key), model.get(high).copied());
         }
     }
-    assert_eq!(iter.size_hint(), (0, None));
+    assert_eq!(iter.size_hint(), (0, Some(0)));
     assert!(iter.next().is_none() && iter.next_back().is_none());
 }
 

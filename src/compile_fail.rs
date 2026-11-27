@@ -270,10 +270,63 @@
 //! tailq::adapter!(NodeLink = Node { link, mut key: u64 });
 //! ```
 //!
-//! ```compile_fail,E0793
+//! ```compile_fail,E0080
 //! use tailq::Link;
 //! #[repr(C, packed)]
 //! struct Packed { tag: u8, key: u32 }
 //! struct Node { link: Link, packed: Packed }
 //! tailq::adapter!(NodeLink = Node { link, mut packed.key: u32 });
+//! ```
+//!
+//! The macro's own rules, called directly, cannot lend the link as a
+//! payload: the queue checks the payload against the adapter's real link.
+//!
+//! ```compile_fail,E0080
+//! use tailq::{Link, TailQueue};
+//! struct Node { link: Link }
+//! tailq::adapter!(NodeLink = Node { link });
+//! tailq::__adapter!(@payload NodeLink [] [] [] Node, [link: Link]);
+//! let mut node = Node { link: Link::new() };
+//! let mut queue = TailQueue::<NodeLink>::new();
+//! queue.push_back(&mut node);
+//! let _ = queue.front_mut();
+//! ```
+//!
+//! A brace group in the bounds cannot close the adapter's header and take
+//! the place of its body:
+//!
+//! ```compile_fail
+//! use tailq::Link;
+//! struct Node { link: Link }
+//! struct Dummy;
+//! trait Sink { type Node; const OFFSET: usize; }
+//! tailq::adapter!(NodeLink = Node { link } where Node: Sized {
+//!     type Node = Node;
+//!     const OFFSET: usize = 999;
+//! } impl Sink for Dummy);
+//! ```
+//!
+//! Only `adapter!` implements `Adapter`: the trait is sealed.
+//!
+//! ```compile_fail,E0277
+//! use tailq::{Adapter, Link};
+//! struct Node { link: Link }
+//! enum ByHand {}
+//! unsafe impl Adapter for ByHand {
+//!     type Node = Node;
+//!     const OFFSET: usize = 0;
+//! }
+//! ```
+//!
+//! A node that leaves is handed back, and dropping it unused is a warning:
+//!
+//! ```compile_fail
+//! #![deny(unused_must_use)]
+//! use tailq::{Link, TailQueue};
+//! struct Node { link: Link }
+//! tailq::adapter!(NodeLink = Node { link });
+//! let mut node = Node { link: Link::new() };
+//! let mut queue = TailQueue::<NodeLink>::new();
+//! queue.push_back(&mut node);
+//! queue.cursor_front_mut().remove_current();
 //! ```
