@@ -490,8 +490,8 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// `node` must point at a live, aligned node whose link is on no
     /// queue, and it must be valid for reads and writes of the whole node.
     /// Until the node leaves the queue, or, if the queue is never dropped,
-    /// as in a [`ManuallyDrop`](core::mem::ManuallyDrop), until the queue's
-    /// last use:
+    /// as in a [`ManuallyDrop`](core::mem::ManuallyDrop), until the last use
+    /// of the queue and of every reference it handed out:
     ///
     /// - it must stay live and unmoved, and `node` must stay valid for it:
     ///   the node may be reached only through `node` and pointers derived
