@@ -517,10 +517,13 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// caller made it from `node`, as a `Drop` of a boxed node does, keeps
     /// every queue the node is still on unused for as long as it is used:
     /// their operations, and in debug builds their checks, read the links
-    /// of nodes they do not change.  Only [`remove_ptr`](Self::remove_ptr)
-    /// and [`contains_ptr`](Self::contains_ptr), given that node, reach it
-    /// through `node` alone or not at all, so a node borrowed so can still
-    /// look itself up and leave a queue.
+    /// of nodes they do not change.  Only [`remove_ptr`](Self::remove_ptr),
+    /// given a pointer to the node taken from that `&mut`, and
+    /// [`contains_ptr`](Self::contains_ptr) reach the node through the
+    /// pointer they are given alone, or not at all, so a node borrowed so
+    /// can still look itself up and leave a queue.  `node` itself is not one
+    /// to give `remove_ptr` then: the `&mut` came from it, and an access
+    /// through it while the `&mut` is used is undefined behaviour.
     #[inline]
     pub unsafe fn push_front_ptr(&mut self, node: NonNull<A::Node>) {
         // SAFETY: the caller keeps the push contract.
