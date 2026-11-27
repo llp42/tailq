@@ -42,12 +42,13 @@ pub unsafe trait Adapter: Sealed {
 /// where it first lends a payload, that the payload lies apart from the
 /// link.
 ///
-/// A payload may hold the links of other queues.  A node is on several
-/// queues only through pushes by pointer, and their contract then makes
-/// the caller leave those queues unused while this one lends its payload,
-/// since in debug builds their checks read the links of nodes that the
-/// operation itself does not touch, and keep the payload's borrower off
-/// those links.
+/// A payload may hold the links of other queues.  Safe code can push a
+/// lent payload onto another queue, which keeps this one borrowed for as
+/// long as that queue holds it.  Pushes by pointer can put a node on
+/// several queues at once, and their contract then makes the caller leave
+/// those queues unused while this one lends its payload, since in debug
+/// builds their checks read the links of nodes that the operation itself
+/// does not touch, and keep the payload's borrower off those links.
 ///
 /// # Safety
 ///
@@ -478,7 +479,10 @@ macro_rules! __adapter {
     };
     (@check [$($decl:tt)+] $name:ident) => {};
     (@check_payload [] $name:ident) => {
-        const _: () = $crate::__private::check_payload::<$name>();
+        // In parentheses, a type even where `$name` is a keyword of a later
+        // edition, as `gen` is to a 2021 caller, which a generic argument
+        // would parse as a const expression.
+        const _: () = $crate::__private::check_payload::<($name)>();
     };
     (@check_payload [$($decl:tt)+] $name:ident) => {};
     (

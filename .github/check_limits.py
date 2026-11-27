@@ -94,7 +94,13 @@ def check_lint_job() -> list[str]:
     ]
     return [
         f"lint.yml no longer runs {script}"
-        for script in ("check_workflows.py", "check_limits.py", "check_workflows_test.py", "check_limits_test.py")
+        for script in (
+            "check_workflows.py",
+            "check_limits.py",
+            "check_workflows_test.py",
+            "check_limits_test.py",
+            "check_runs.py",
+        )
         if not any(f"python3 -I .github/{script}" in run for run in runs)
     ]
 

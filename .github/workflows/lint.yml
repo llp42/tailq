@@ -72,3 +72,6 @@ jobs:
       - run: python3 -I .github/check_limits_test.py
       # check_workflows.py fed what review 7's mutants found it passed, and test.yml's flip, doctest and package steps.
       - run: python3 -I .github/check_workflows_test.py
+      # What the jobs run, which nothing above reads: every Miri configuration, the nightly doctests, each job's
+      # commands, no step or job that may fail softly, and the triggers; and every checker's main() running each rule.
+      - run: python3 -I .github/check_runs.py

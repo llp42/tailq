@@ -17,6 +17,9 @@ use core::iter::FusedIterator;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 
+#[cfg(debug_assertions)]
+use super::on_queue;
+
 /// A cursor over a shared [`TailQueue`], borrowed for `'head`.
 ///
 /// The cursor borrows the queue for as long as it is in use, so the queue
@@ -503,15 +506,24 @@ impl<A: Adapter, C: Count> IterPtr<'_, A, C> {
     /// # Panics
     ///
     /// In debug builds, when the node left the queue.
+    #[cfg_attr(
+        not(debug_assertions),
+        expect(
+            clippy::missing_const_for_fn,
+            reason = "the check compiles out of release builds"
+        )
+    )]
     #[inline]
     fn check_left(at: NonNull<Link>) {
         // SAFETY: a node stays live while it is on the queue, and the walk
         // contract keeps this one on it.
-        let linked = unsafe { at.as_ref() }.is_linked();
-        debug_assert!(
-            linked,
+        #[cfg(debug_assertions)]
+        assert!(
+            unsafe { on_queue(at) },
             "tail queue: a node the walk had not handed out left the queue",
         );
+        #[cfg(not(debug_assertions))]
+        let _: NonNull<Link> = at;
     }
 }
 

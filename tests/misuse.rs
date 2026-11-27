@@ -209,7 +209,7 @@ fn moved_middle(nodes: &Nodes) -> (Queue, NonNull<Node>) {
 }
 
 #[test]
-#[should_panic(expected = "tail queue: the next link does not point back")]
+#[should_panic(expected = "tail queue: the link is not on this queue")]
 fn a_moved_node_is_not_removed() {
     let nodes = Nodes::new(4);
     let (mut queue, moved) = moved_middle(&nodes);
@@ -593,11 +593,15 @@ fn a_stale_head_does_not_pop_a_node_that_already_left() {
     assert!(stale.pop_front_ptr().is_none(), "unreachable");
 }
 
-/// Mutant C03, and 0fd7ca5's claim: a link on no queue that the membership
-/// walk meets on its way, here the first node's, zeroed in place, is caught
-/// too, rather than read as linked through `unwrap_unchecked`.
+/// Mutant C03, and 0fd7ca5's claim: a link on no queue next to the node,
+/// here the first node's, zeroed in place, is caught too, rather than read
+/// as linked through `unwrap_unchecked`.  Since review 8 the membership
+/// walk reads only the queue's own links, and the removal's check of the
+/// node's neighbours catches it.
 #[test]
-#[should_panic(expected = "tail queue: the link is on no queue")]
+#[should_panic(
+    expected = "tail queue: the previous link does not point at this one"
+)]
 fn a_link_on_no_queue_met_mid_walk_is_caught() {
     let nodes = Nodes::new(3);
     let mut queue = Queue::new();
@@ -638,11 +642,12 @@ fn dropping_a_corrupt_queue_leaves_another_alone() {
     assert!(other.iter().all(|node| node.link.is_linked()));
 }
 
-/// Review 5: the membership walk ahead meets a link that left a queue, its
-/// forward word `NOWHERE`, and reports it rather than follow it.  Here the
-/// fifth of six nodes holds the bytes of a node that left a queue.
+/// Review 5: the membership walk meets a link that left a queue, and
+/// reports it rather than follow it.  Here the fifth of six nodes holds the
+/// bytes of a node that left a queue, so the walk from the back meets its
+/// `prev` of `None`.
 #[test]
-#[should_panic(expected = "tail queue: the link is on no queue")]
+#[should_panic(expected = "tail queue: the link is not on this queue")]
 fn the_membership_walk_ahead_catches_a_link_that_left() {
     let nodes = Nodes::new(7);
     let mut queue = ManuallyDrop::new(Queue::new());
@@ -727,13 +732,12 @@ fn a_push_refuses_a_half_relinked_last_node() {
     }
 }
 
-/// Review 6: a copy of a middle link passes the membership walk, which
-/// reaches the ends through its neighbours, but the queue still links the
-/// original; no cursor rests on it, as no removal takes it.
+/// Review 6: a copy of a middle link passed the membership walk, which
+/// reached the ends through its neighbours, while the queue still links
+/// the original; no cursor rests on it, as no removal takes it.  Since
+/// review 8 the walk meets only the queue's own links, and not the copy.
 #[test]
-#[should_panic(
-    expected = "tail queue: the previous link does not point at this one"
-)]
+#[should_panic(expected = "tail queue: the link is not on this queue")]
 fn no_cursor_rests_on_a_moved_node() {
     let nodes = Nodes::new(4);
     let (queue, moved) = moved_middle(&nodes);
@@ -745,9 +749,7 @@ fn no_cursor_rests_on_a_moved_node() {
 
 /// Review 6: as above, with a cursor that could write the queue.
 #[test]
-#[should_panic(
-    expected = "tail queue: the previous link does not point at this one"
-)]
+#[should_panic(expected = "tail queue: the link is not on this queue")]
 fn no_mutable_cursor_rests_on_a_moved_node() {
     let nodes = Nodes::new(4);
     let (mut queue, moved) = moved_middle(&nodes);
@@ -987,4 +989,220 @@ fn dropping_a_head_with_a_first_but_no_last_leaves_its_node_alone() {
     drop(unsafe { first_but_no_last(&nodes) });
     // SAFETY: the node is live, and no queue is left to write it.
     assert!(unsafe { nodes.at(0).as_ref() }.link.is_linked());
+}
+
+/// Nodes boxed one by one, so that a test can free some of them; the rest
+/// are freed when the set goes.
+struct Boxes(Vec<Option<NonNull<Node>>>);
+
+impl Boxes {
+    fn new(len: u32) -> Self {
+        Self(
+            (0..len)
+                .map(|key| {
+                    let node = Box::new(Node {
+                        key,
+                        link: Link::new(),
+                    });
+                    Some(NonNull::from(Box::leak(node)))
+                })
+                .collect(),
+        )
+    }
+
+    /// Returns the node at `i`, which must not have been freed.
+    fn at(&self, i: usize) -> NonNull<Node> {
+        let node = self.0.get(i).copied().flatten();
+        assert!(node.is_some(), "a live node of the set");
+        node.unwrap_or(NonNull::dangling())
+    }
+
+    /// Frees the node at `i`.
+    fn free(&mut self, i: usize) {
+        if let Some(node) = self.0.get_mut(i).and_then(Option::take) {
+            // SAFETY: the node came from `Box::leak` and is freed once.
+            drop(unsafe { Box::from_raw(node.as_ptr()) });
+        }
+    }
+}
+
+impl Drop for Boxes {
+    fn drop(&mut self) {
+        for i in 0..self.0.len() {
+            self.free(i);
+        }
+    }
+}
+
+/// Pushes the first three boxed nodes onto a queue that is never dropped,
+/// as a `ManuallyDrop` allows, then frees the first and the third: the
+/// second is left marked as linked, between two freed nodes.
+fn forgotten_between_freed(boxes: &mut Boxes) {
+    let mut gone = ManuallyDrop::new(Queue::new());
+    // SAFETY: the nodes are live and on no queue when pushed, and the
+    // queue is never used again once they are freed.
+    unsafe {
+        for i in 0..3 {
+            gone.push_back_ptr(boxes.at(i));
+        }
+    }
+    boxes.free(0);
+    boxes.free(2);
+}
+
+/// Review 8: the membership walk followed the node's own links, which here
+/// lead to freed nodes; it now walks only this queue's, from both ends, and
+/// reads no more of the node than its own words.
+#[test]
+#[should_panic(expected = "tail queue: the link is not on this queue")]
+fn a_removal_by_address_reads_no_link_off_this_queue() {
+    let mut boxes = Boxes::new(4);
+    forgotten_between_freed(&mut boxes);
+    let mut queue = Queue::new();
+    // SAFETY: the fourth node is live and on no queue; removing the second,
+    // which is on none of this queue's, is the misuse.
+    unsafe {
+        queue.push_back_ptr(boxes.at(3));
+        queue.remove_ptr(boxes.at(1));
+    }
+}
+
+/// Review 8: as above, through a cursor that starts at the node.
+#[test]
+#[should_panic(expected = "tail queue: the link is not on this queue")]
+fn a_cursor_by_address_reads_no_link_off_this_queue() {
+    let mut boxes = Boxes::new(4);
+    forgotten_between_freed(&mut boxes);
+    let mut queue = Queue::new();
+    // SAFETY: as above.
+    unsafe {
+        queue.push_back_ptr(boxes.at(3));
+        assert!(queue.cursor_from_ptr(boxes.at(1)).current().is_some());
+    }
+}
+
+/// Review 8: an append checked the other queue's first only, so a stale
+/// head whose last had gained a successor gave this queue a last with a
+/// neighbour.
+#[test]
+#[should_panic(expected = "tail queue: the head's end has a neighbour")]
+fn an_append_checks_the_other_queues_last() {
+    let nodes = Nodes::new(4);
+    let mut queue = Queue::new();
+    // SAFETY: the nodes are live, outlive the queues and are on no queue
+    // when pushed; appending the stale head is the misuse.
+    unsafe {
+        let (mut source, mut stale) = stale_copy(&nodes);
+        source.push_back_ptr(nodes.at(2));
+        queue.push_back_ptr(nodes.at(3));
+        queue.append(&mut stale);
+    }
+}
+
+/// Review 8: an append onto itself, through a copy of its head, made a ring
+/// of the queue, which the membership walk and `contains_ptr` then never
+/// left.
+#[test]
+#[should_panic(expected = "tail queue: the queue is appended to itself")]
+fn a_queue_is_not_appended_to_itself() {
+    let nodes = Nodes::new(2);
+    let (mut queue, mut copy) = stale_copy(&nodes);
+    queue.append(&mut copy);
+}
+
+/// Review 8: the membership walk meets its node from the back when the
+/// links forward skip it, and the cursor then refuses the node, which the
+/// link before it does not point at.
+#[test]
+#[should_panic(
+    expected = "tail queue: the previous link does not point at this one"
+)]
+fn no_cursor_rests_on_a_node_the_links_forward_skip() {
+    let nodes = Nodes::new(5);
+    let mut queue = Queue::new();
+    // SAFETY: the nodes are live, outlive the queue and are on no queue
+    // when pushed.  A link is `repr(C)` and starts with its forward word;
+    // pointing the third's past the fourth is the misuse.
+    unsafe {
+        for i in 0..5 {
+            queue.push_back_ptr(nodes.at(i));
+        }
+        let skip = ptr::from_ref(&(*nodes.at(2).as_ptr()).link);
+        let past = ptr::from_ref(&(*nodes.at(4).as_ptr()).link);
+        skip.cast::<*const Link>().cast_mut().write(past);
+        assert!(queue.cursor_from_ptr(nodes.at(3)).current().is_some());
+    }
+}
+
+// Review 8, mutation testing: each test below fails for a mutant of the end
+// check that no other test noticed.
+
+/// Pushes the first two nodes onto a queue and zeroes the link of the one
+/// at `i` in place, as a memset of the node would.
+///
+/// # Safety
+///
+/// The nodes must be live, outlive the queue and be on no queue.
+unsafe fn zeroed_at(nodes: &Nodes, i: usize) -> Queue {
+    let mut queue = Queue::new();
+    // SAFETY: the caller's; zeroing the link is the misuse.
+    unsafe {
+        queue.push_back_ptr(nodes.at(0));
+        queue.push_back_ptr(nodes.at(1));
+        ptr::write(&raw mut (*nodes.at(i).as_ptr()).link, Link::new());
+    }
+    queue
+}
+
+/// Mutant CK1: a link whose `prev` is `None`, here the first of two, zeroed
+/// in place, is on no queue, and the end check says so before it holds the
+/// link's missing next to the head's last.
+#[test]
+#[should_panic(expected = "tail queue: the link is on no queue")]
+fn a_zeroed_first_link_is_not_popped() {
+    let nodes = Nodes::new(2);
+    // SAFETY: the nodes are live, outlive the queue and are on no queue.
+    let mut queue = unsafe { zeroed_at(&nodes, 0) };
+    assert!(queue.pop_front_ptr().is_some(), "unreachable");
+}
+
+/// Mutant CK1: as above, for the last of two, whose `None` the end check
+/// would otherwise take for the previous link and read at address zero.
+#[test]
+#[should_panic(expected = "tail queue: the link is on no queue")]
+fn a_zeroed_last_link_is_not_popped() {
+    let nodes = Nodes::new(2);
+    // SAFETY: as above.
+    let mut queue = unsafe { zeroed_at(&nodes, 1) };
+    assert!(queue.pop_back_ptr().is_some(), "unreachable");
+}
+
+/// Mutant CK9: a link with no next is at the back of a queue only when the
+/// head names it as its last, which a head with a first but no last does
+/// not, so such a head pops nothing.
+#[test]
+#[should_panic(expected = "tail queue: the link is not on this queue")]
+fn a_head_with_a_first_but_no_last_pops_nothing() {
+    let nodes = Nodes::new(1);
+    // SAFETY: the node is live, outlives the queue and is on no queue.
+    let mut queue = unsafe { first_but_no_last(&nodes) };
+    assert!(queue.pop_front_ptr().is_some(), "unreachable");
+}
+
+/// Mutant CK10: as above, a link whose `prev` marks it as first is at the
+/// front of a queue only when the head names it as its first, which a head
+/// with a last but no first does not.
+#[test]
+#[should_panic(expected = "tail queue: the link is not on this queue")]
+fn a_head_with_a_last_but_no_first_pops_nothing() {
+    let nodes = Nodes::new(1);
+    let mut queue = Queue::new();
+    // SAFETY: the node is live and outlives the queue, and is on no queue
+    // when pushed.  The head is `repr(C)` and starts with its first link;
+    // zeroing it, to `None`, is the misuse.
+    unsafe {
+        queue.push_back_ptr(nodes.at(0));
+        ptr::from_mut(&mut queue).cast::<usize>().write(0);
+    }
+    assert!(queue.pop_back_ptr().is_some(), "unreachable");
 }

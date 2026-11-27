@@ -82,6 +82,8 @@ mod adapter;
 mod compile_fail;
 mod count;
 mod cursor;
+#[cfg(doctest)]
+mod editions;
 
 pub use adapter::{Adapter, Payload};
 use adapter::{link_of, node_of, payload_of};
@@ -121,61 +123,38 @@ pub(crate) fn is(slot: Option<NonNull<Link>>, at: NonNull<Link>) -> bool {
     }
 }
 
-/// Returns the `next` word of the link at `at`, read through a raw
-/// pointer: unlike `Cell::get` it costs no call in unoptimised builds,
-/// where the debug checks walk links through it.
+/// Returns whether the link at `at` is on a queue, as
+/// [`Link::is_linked`] does, through [`prev_word`]: unlike `is_linked` it
+/// costs no call in unoptimised builds.
 ///
 /// # Safety
 ///
 /// `at` must be the link of a live node.
 #[cfg(debug_assertions)]
+#[expect(clippy::inline_always, reason = "as for `next_word`")]
 #[expect(
-    clippy::inline_always,
-    reason = "the debug checks walk links through it, where a call would \
-              cost more than the load"
+    clippy::cmp_null,
+    reason = "`is_null` is a call in unoptimised builds"
 )]
 #[inline(always)]
-const unsafe fn next_of(at: NonNull<Link>) -> Option<NonNull<Link>> {
-    // SAFETY: the link is live, and a `Cell` has the layout of its value.
-    unsafe { *(&raw const (*at.as_ptr()).next).cast::<Option<NonNull<Link>>>() }
-}
-
-/// Returns the `prev` word of the link at `at`, as [`next_of`] does.
-///
-/// # Safety
-///
-/// `at` must be the link of a live node.
-#[cfg(debug_assertions)]
-#[expect(
-    clippy::inline_always,
-    reason = "the debug checks walk links through it, where a call would \
-              cost more than the load"
-)]
-#[inline(always)]
-const unsafe fn prev_of(at: NonNull<Link>) -> Option<NonNull<Link>> {
-    // SAFETY: the link is live, and a `Cell` has the layout of its value.
-    unsafe { *(&raw const (*at.as_ptr()).prev).cast::<Option<NonNull<Link>>>() }
-}
-
-/// Returns `slot` as a raw pointer, null for `None`.
-#[cfg(debug_assertions)]
-#[expect(clippy::inline_always, reason = "as for `next_of`")]
-#[inline(always)]
-const fn word(slot: Option<NonNull<Link>>) -> *mut Link {
-    match slot {
-        Some(link) => link.as_ptr(),
-        None => ptr::null_mut(),
-    }
+pub(crate) unsafe fn on_queue(at: NonNull<Link>) -> bool {
+    // SAFETY: the caller's.
+    unsafe { prev_word(at.as_ptr()) != ptr::null_mut() }
 }
 
 /// Returns the `next` word of the link at `at` as a raw pointer, null for
-/// `None`, as [`next_of`] does.
+/// `None`, read through a raw pointer: unlike `Cell::get` it costs no call
+/// in unoptimised builds, where the debug checks walk links through it.
 ///
 /// # Safety
 ///
 /// `at` must be the link of a live node.
 #[cfg(debug_assertions)]
-#[expect(clippy::inline_always, reason = "as for `next_of`")]
+#[expect(
+    clippy::inline_always,
+    reason = "the debug checks walk links through it, where a call would \
+              cost more than the load"
+)]
 #[inline(always)]
 const unsafe fn next_word(at: *mut Link) -> *mut Link {
     // SAFETY: the link is live, a `Cell` has the layout of its value, and
@@ -189,7 +168,7 @@ const unsafe fn next_word(at: *mut Link) -> *mut Link {
 ///
 /// `at` must be the link of a live node.
 #[cfg(debug_assertions)]
-#[expect(clippy::inline_always, reason = "as for `next_of`")]
+#[expect(clippy::inline_always, reason = "as for `next_word`")]
 #[inline(always)]
 const unsafe fn prev_word(at: *mut Link) -> *mut Link {
     // SAFETY: as for `next_word`.
@@ -406,7 +385,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// In debug builds, when the node's link is on no queue or on another
     /// queue, which costs O(min(i, n - i)) to tell for the `i`th of `n`
-    /// nodes there.
+    /// nodes here.
     ///
     /// # Safety
     ///
@@ -452,7 +431,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// In debug builds, when the node's link is on no queue or on another
     /// queue, which costs O(min(i, n - i)) to tell for the `i`th of `n`
-    /// nodes there.
+    /// nodes here.
     ///
     /// # Safety
     ///
@@ -509,8 +488,10 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// # Safety
     ///
     /// `node` must point at a live, aligned node whose link is on no
-    /// queue, and it must be valid for reads and writes of the whole node.  Until the
-    /// node leaves the queue:
+    /// queue, and it must be valid for reads and writes of the whole node.
+    /// Until the node leaves the queue, or, if the queue is never dropped,
+    /// as in a [`ManuallyDrop`](core::mem::ManuallyDrop), until the queue's
+    /// last use:
     ///
     /// - it must stay live and unmoved, and `node` must stay valid for it:
     ///   the node may be reached only through `node` and pointers derived
@@ -536,8 +517,10 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         let link = unsafe { link_of::<A>(node) };
         // SAFETY: the node is live.
         let new = unsafe { link.as_ref() };
-        debug_assert!(
-            !new.is_linked(),
+        // SAFETY: as above.
+        #[cfg(debug_assertions)]
+        assert!(
+            !unsafe { on_queue(link) },
             "tail queue: the link is already on a queue",
         );
         if let Some(first) = self.first {
@@ -572,8 +555,10 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         let link = unsafe { link_of::<A>(node) };
         // SAFETY: the node is live.
         let new = unsafe { link.as_ref() };
-        debug_assert!(
-            !new.is_linked(),
+        // SAFETY: as above.
+        #[cfg(debug_assertions)]
+        assert!(
+            !unsafe { on_queue(link) },
             "tail queue: the link is already on a queue",
         );
         if let Some(last) = self.last {
@@ -693,8 +678,9 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// In debug builds, when the node's link is on no queue or on another
     /// queue, or when it is not consistent with its neighbours.  Telling
-    /// another queue apart walks from the node toward the nearer end, so
-    /// it costs O(min(i, n - i)) for the `i`th of `n` nodes there.
+    /// another queue apart walks this queue from both ends toward the node,
+    /// reading no link but its own off this queue, so it costs
+    /// O(min(i, n - i)) for the `i`th of `n` nodes here.
     ///
     /// # Safety
     ///
@@ -774,14 +760,22 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         let Some(first) = other.first else {
             return;
         };
-        // SAFETY: `first` is the link of a live node on `other`, and the
-        // last of this queue that of a live node on this one.
+        // SAFETY: `first` and `other`'s last are the links of live nodes on
+        // `other`, and the last of this queue that of a live node on this
+        // one.
         unsafe {
             other.check(first);
+            // The last link, which a queue with a first one has.
+            other.check(other.last.unwrap_or(first));
             if let Some(last) = self.last {
                 self.check(last);
             }
         }
+        // A copy of this head would make a ring of the queue.
+        debug_assert!(
+            !is(self.first, first),
+            "tail queue: the queue is appended to itself",
+        );
         other.first = None;
         // SAFETY: as above.
         let head = unsafe { first.as_ref() };
@@ -817,8 +811,9 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         // SAFETY: the link is on this queue, and the previous node is live.
         let own = unsafe { link.prev_link() }
             .map_or(self.first, |prev| unsafe { prev.as_ref() }.next.get());
-        // A copy of a middle link passes the membership walk; the queue
-        // still links the original.
+        // A queue whose links forward and back disagree: the membership
+        // walk may meet `at` from the back while the link before it points
+        // past it.
         debug_assert!(
             is(own, at),
             "tail queue: the previous link does not point at this one",
@@ -827,9 +822,10 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     }
 
     /// Checks, in debug builds, that the link `at` is on this queue: walks
-    /// from it toward both ends at once, and checks that the end it reaches
-    /// first is this queue's.  It costs O(min(i, n - i)) for the `i`th of
-    /// `n` nodes, and nothing in release builds.
+    /// this queue from both ends at once until it meets `at`, so that it
+    /// reads no link off this queue but `at`'s own words.  It costs
+    /// O(min(i, n - i)) for the `i`th of `n` nodes, and nothing in release
+    /// builds.
     ///
     /// # Panics
     ///
@@ -837,8 +833,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///
     /// # Safety
     ///
-    /// `at` must be the link of a live node, on a queue of live nodes when
-    /// it is on one.
+    /// `at` must be the link of a live node.
     #[cfg_attr(
         not(debug_assertions),
         expect(
@@ -847,45 +842,50 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
             reason = "the check compiles out of release builds"
         )
     )]
+    #[cfg_attr(
+        debug_assertions,
+        expect(
+            clippy::cmp_null,
+            reason = "`is_null` is a call in unoptimised builds"
+        )
+    )]
     #[inline]
     unsafe fn check_member(&self, at: NonNull<Link>) {
         #[cfg(debug_assertions)]
         {
-            let (mut back, mut ahead) = (at, at);
-            loop {
-                // SAFETY: the links walked are those of live nodes.
-                match unsafe { prev_of(back) } {
-                    Some(before) if before.as_ptr() != NOWHERE.as_ptr() => {
-                        back = before;
-                    }
-                    // The first link, or one on no queue: `at`, or a link a
-                    // corrupt queue leads to.
-                    prev => {
-                        assert!(
-                            prev.is_some(),
-                            "tail queue: the link is on no queue",
-                        );
-                        assert!(
-                            is(self.first, back),
-                            "tail queue: the link is not on this queue",
-                        );
-                        break;
-                    }
-                }
-                // SAFETY: as above.
-                let Some(next) = (unsafe { next_of(ahead) }) else {
-                    assert!(
-                        is(self.last, ahead),
-                        "tail queue: the link is not on this queue",
-                    );
-                    break;
-                };
-                // A link that left a queue: its forward word is `NOWHERE`.
+            // The words compared as raw pointers, null for `None`, as in
+            // `check`.
+            let (nowhere, link) = (NOWHERE.as_ptr(), at.as_ptr());
+            // SAFETY: the node is live.  Its words are read, never followed:
+            // they may lead into a queue whose nodes are gone, as one in a
+            // `ManuallyDrop` leaves behind.
+            let (prev, next) = unsafe { (prev_word(link), next_word(link)) };
+            assert!(
+                prev != ptr::null_mut() && next != nowhere,
+                "tail queue: the link is on no queue",
+            );
+            // This queue, walked from both ends at once by address, so that
+            // only its own links are read.
+            let (mut ahead, mut back) = self.ends();
+            while ahead != link && back != link {
                 assert!(
-                    next.as_ptr() != NOWHERE.as_ptr(),
-                    "tail queue: the link is on no queue",
+                    ahead != ptr::null_mut()
+                        && back != ptr::null_mut()
+                        && ahead != nowhere
+                        && back != nowhere
+                        && ahead != back,
+                    "tail queue: the link is not on this queue",
                 );
-                ahead = next;
+                // SAFETY: a node stays live while it is on the queue.
+                let after = unsafe { next_word(ahead) };
+                assert!(
+                    after != back,
+                    "tail queue: the link is not on this queue"
+                );
+                ahead = after;
+                // SAFETY: as above; `ahead` lay before `back`, so `back` is
+                // not the first link.
+                back = unsafe { prev_word(back) };
             }
         }
         #[cfg(not(debug_assertions))]
@@ -928,6 +928,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
             // `links_hold`: in unoptimised builds a match on each `Option`
             // costs more than the loads.
             let nowhere = NOWHERE.as_ptr();
+            let (first, last) = self.ends();
             let link = at.as_ptr();
             // SAFETY: the node is live.
             let prev = unsafe { prev_word(link) };
@@ -941,34 +942,37 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
             assert!(ahead != nowhere, "tail queue: the link is on no queue");
             if ahead == ptr::null_mut() {
                 assert!(
-                    word(self.last) == link,
+                    last == link,
                     "tail queue: the link is not on this queue",
                 );
             } else {
+                // Before the neighbour is read: a stale head's end may have
+                // one that is gone.
+                assert!(
+                    last != link,
+                    "tail queue: the head's end has a neighbour",
+                );
                 // SAFETY: a link on a queue has a live next node.
                 assert!(
                     unsafe { prev_word(ahead) } == link,
                     "tail queue: the next link does not point back",
                 );
-                assert!(
-                    word(self.last) != link,
-                    "tail queue: the head's end has a neighbour",
-                );
             }
             if prev == nowhere {
                 assert!(
-                    word(self.first) == link,
+                    first == link,
                     "tail queue: the link is not on this queue",
                 );
             } else {
+                // As above.
+                assert!(
+                    first != link,
+                    "tail queue: the head's end has a neighbour",
+                );
                 // SAFETY: a link on a queue has a live previous node.
                 assert!(
                     unsafe { next_word(prev) } == link,
                     "tail queue: the previous link does not point at this one",
-                );
-                assert!(
-                    word(self.first) != link,
-                    "tail queue: the head's end has a neighbour",
                 );
             }
         }
@@ -1026,8 +1030,10 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         unsafe { self.check(at) };
         // SAFETY: both nodes are live.
         let (anchor, new) = unsafe { (at.as_ref(), link.as_ref()) };
-        debug_assert!(
-            !new.is_linked(),
+        // SAFETY: as above.
+        #[cfg(debug_assertions)]
+        assert!(
+            !unsafe { on_queue(link) },
             "tail queue: the link is already on a queue",
         );
         let next = anchor.next.replace(Some(link));
@@ -1058,8 +1064,10 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         unsafe { self.check(at) };
         // SAFETY: both nodes are live.
         let (anchor, new) = unsafe { (at.as_ref(), link.as_ref()) };
-        debug_assert!(
-            !new.is_linked(),
+        // SAFETY: as above.
+        #[cfg(debug_assertions)]
+        assert!(
+            !unsafe { on_queue(link) },
             "tail queue: the link is already on a queue",
         );
         let prev = anchor.prev.replace(Some(link));
@@ -1127,8 +1135,10 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         unsafe { self.check(at) };
         // SAFETY: both nodes are live.
         let (old, new) = unsafe { (at.as_ref(), link.as_ref()) };
-        debug_assert!(
-            !new.is_linked(),
+        // SAFETY: as above.
+        #[cfg(debug_assertions)]
+        assert!(
+            !unsafe { on_queue(link) },
             "tail queue: the link is already on a queue",
         );
         let next = old.next.get();
@@ -1150,6 +1160,23 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         release(old);
     }
 
+    /// Returns the first and the last link as raw pointers, null for
+    /// `None`, read as [`next_word`] reads a link's words: in unoptimised
+    /// builds a match on each `Option` costs more than the load.
+    #[cfg(debug_assertions)]
+    #[expect(clippy::inline_always, reason = "as for `next_word`")]
+    #[inline(always)]
+    const fn ends(&self) -> (*mut Link, *mut Link) {
+        // SAFETY: `Option<NonNull<Link>>` has the layout of `*mut Link`,
+        // null for `None`.
+        unsafe {
+            (
+                *(&raw const self.first).cast::<*mut Link>(),
+                *(&raw const self.last).cast::<*mut Link>(),
+            )
+        }
+    }
+
     /// Returns, in debug builds, whether every link from the first is
     /// consistent with its neighbours and the last is this queue's, without
     /// panicking.
@@ -1163,9 +1190,8 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         // unoptimised builds a match on each `Option` costs more than the
         // walk's loads.
         let nowhere = NOWHERE.as_ptr();
-        let last = word(self.last);
+        let (mut at, last) = self.ends();
         let mut before = nowhere;
-        let mut at = word(self.first);
         while at != ptr::null_mut() {
             // SAFETY: a node stays live while it is on the queue, and the
             // walk stops at the first link that does not hold.
