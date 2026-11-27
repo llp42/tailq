@@ -212,6 +212,45 @@ where
 /// The macro is tested only in crates of the 2024 edition, the one
 /// `tailq` itself is written in.
 ///
+/// Doc comments and `#[doc]` attributes are the only attributes the
+/// adapter takes, since the items the macro declares beside it name it
+/// too.  A `#[cfg]` goes on the call, and leaves out all of them:
+///
+/// ```
+/// use tailq::Link;
+///
+/// struct Thread {
+///     link: Link,
+/// }
+///
+/// #[cfg(any())]
+/// tailq::adapter!(
+///     /// Declared in no build.
+///     RunLink = Thread { link }
+/// );
+///
+/// tailq::adapter!(
+///     #[doc(hidden)]
+///     WaitLink = Thread { link }
+/// );
+/// ```
+///
+/// Any other attribute fails to compile, a `#[cfg]` or a `#[deprecated]`
+/// among them:
+///
+/// ```compile_fail
+/// use tailq::Link;
+///
+/// struct Thread {
+///     link: Link,
+/// }
+///
+/// tailq::adapter!(
+///     #[deprecated = "use WaitLink"]
+///     RunLink = Thread { link }
+/// );
+/// ```
+///
 /// A payload, which the queue lends as `&mut` while the node is linked,
 /// follows the link as `mut path: Type`, and makes the adapter a
 /// [`Payload`] one:
@@ -303,8 +342,8 @@ where
 /// ```
 #[macro_export]
 macro_rules! adapter {
-    ($(#[$attr:meta])* $vis:vis $name:ident $($rest:tt)*) => {
-        $crate::__adapter!(@start [$(#[$attr])* $vis $name] $($rest)*);
+    ($(#[doc $($doc:tt)*])* $vis:vis $name:ident $($rest:tt)*) => {
+        $crate::__adapter!(@start [$(#[doc $($doc)*])* $vis $name] $($rest)*);
     };
 }
 
@@ -361,7 +400,7 @@ macro_rules! __adapter {
         );
     };
     (
-        @define [$(#[$attr:meta])* $vis:vis $name:ident]
+        @define [$(#[doc $($doc:tt)*])* $vis:vis $name:ident]
             [$($decl:tt)*] [$($arg:tt)*]
             = $node:ty {
                 $($field:ident).+
@@ -373,7 +412,7 @@ macro_rules! __adapter {
         // The bounds sit on the type too, which ends at them: a brace
         // group among them fails to parse, rather than closing a header
         // below and taking the place of its body.
-        $(#[$attr])*
+        $(#[doc $($doc)*])*
         #[derive(Clone, Copy, Debug)]
         $vis struct $name<$($decl)*>(
             $crate::__private::Infallible,
