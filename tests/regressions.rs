@@ -886,6 +886,24 @@ fn a_payload_reached_through_a_deref_fails_its_check() {
     assert_eq!(payload_offset::<Node, u32>(16, -8), 16);
 }
 
+/// As above, for a link whose place lies before the node.
+#[test]
+#[should_panic(
+    expected = "tailq::adapter!: the path reaches the link through a deref"
+)]
+fn a_link_placed_before_its_node_fails_its_check() {
+    assert_eq!(link_offset::<Node>(0, -8), 0);
+}
+
+/// As above, for a payload whose place lies past where `offset_of!` says.
+#[test]
+#[should_panic(
+    expected = "tailq::adapter!: the path reaches the payload through a deref"
+)]
+fn a_payload_placed_past_its_offset_fails_its_check() {
+    assert_eq!(payload_offset::<Node, u32>(16, 24), 16);
+}
+
 /// A walk over a head reached by pointer may move the node it has just
 /// handed out to another queue, which is what BSD's `TAILQ_FOREACH_SAFE`
 /// is for, from either end, through `fold` and `rfold` as well as `next`

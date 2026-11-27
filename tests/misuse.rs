@@ -777,6 +777,19 @@ unsafe fn half_relinked(nodes: &Nodes, queue: &mut Queue) {
     }
 }
 
+/// A lookup by address refuses the forward word of a link that left,
+/// rather than follow it: here the last of two nodes, which the walk
+/// reaches looking for an address on no queue.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_lookup_refuses_a_half_relinked_node() {
+    let nodes = Nodes::new(2);
+    let mut queue = ManuallyDrop::new(Queue::new());
+    // SAFETY: the nodes are live, outlive the queue and are on no queue.
+    unsafe { half_relinked(&nodes, &mut queue) };
+    assert!(!queue.contains_ptr(NonNull::dangling()), "unreachable");
+}
+
 /// The end checks of a pop, a push and the like refuse a forward word that
 /// marks a link as on no queue, rather than read through it.
 #[test]
