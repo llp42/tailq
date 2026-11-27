@@ -20,8 +20,13 @@ queue never allocates or frees. The crate is `no_std` and needs no
   instead. The pointers they return are the ones the nodes were pushed
   with, so code that owns the nodes by pointer can write them while they
   are linked.
-- Debug builds check that each link's neighbours point back at it, and
-  that a pushed link is on no queue.
+- A payload adapter, `adapter!(RunLink = Thread { link, mut info: Info })`,
+  lends each linked node's payload as `&mut Info` through `front_mut`,
+  `back_mut`, `iter_mut` and `CursorMut::current_mut`, and checks at
+  compile time that the payload lies apart from the link.
+- Debug builds check, before an operation writes anything, that each
+  link it touches is consistent with its neighbours and, at either end,
+  belongs to this queue, and that a pushed link is on no queue.
 
 ```rust
 use tailq::{Link, TailQueue};

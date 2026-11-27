@@ -752,3 +752,76 @@ fn a_linked_node_cannot_join_again() {
         other.push_back_ptr(at);
     }
 }
+
+/// What a payload node carries besides its link.
+struct Info {
+    key: u32,
+    hits: u32,
+}
+
+/// A node whose payload a queue lends mutably.
+struct Entry {
+    link: Link,
+    info: Info,
+}
+
+tailq::adapter!(EntryLink = Entry { link, mut info: Info });
+
+const fn entry(key: u32) -> Entry {
+    Entry {
+        link: Link::new(),
+        info: Info { key, hits: 0 },
+    }
+}
+
+#[test]
+fn payloads_are_lent_mutably() {
+    let mut entries: Vec<Entry> = (0..4).map(entry).collect();
+    let mut queue = TailQueue::<EntryLink>::new();
+    for entry in &mut entries {
+        queue.push_back(entry);
+    }
+    // Every payload borrowed at once, while the iterator walks the links.
+    let all: Vec<&mut Info> = queue.iter_mut().collect();
+    for (info, hits) in all.into_iter().zip(10..) {
+        info.hits = hits;
+    }
+    for info in queue.iter_mut().rev() {
+        info.hits = info.hits.wrapping_mul(2);
+    }
+    if let Some(info) = queue.front_mut() {
+        info.key = 100;
+    }
+    if let Some(info) = queue.back_mut() {
+        info.key = 103;
+    }
+    {
+        let mut cursor = queue.cursor_front_mut();
+        cursor.move_next();
+        if let Some(info) = cursor.current_mut() {
+            info.key = 101;
+        }
+        cursor.move_prev();
+        cursor.move_prev();
+        assert!(cursor.current_mut().is_none());
+    }
+    for info in &mut queue {
+        info.hits = info.hits.wrapping_add(1);
+    }
+    let seen: Vec<(u32, u32)> = queue
+        .iter()
+        .map(|entry| (entry.info.key, entry.info.hits))
+        .collect();
+    assert_eq!(seen, [(100, 21), (101, 23), (2, 25), (103, 27)]);
+
+    let mut ends = queue.iter_mut();
+    let mut met = Vec::new();
+    while let (Some(front), back) = (ends.next(), ends.next_back()) {
+        met.push(front.key);
+        if let Some(info) = back {
+            met.push(info.key);
+        }
+    }
+    assert_eq!(met, [100, 103, 101, 2]);
+    assert!(queue.iter().all(|entry| entry.link.is_linked()));
+}

@@ -8,7 +8,7 @@
 //! from the first, reaches the ghost, and moving on from the ghost wraps
 //! to the other end.
 
-use super::{Adapter, Count, Link, TailQueue, Uncounted};
+use super::{Adapter, Count, Link, Payload, TailQueue, Uncounted};
 use core::fmt;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
@@ -376,6 +376,20 @@ impl<'head, 'nodes, A: Adapter, C: Count> CursorMut<'head, 'nodes, A, C> {
     }
 }
 
+impl<A: Payload, C: Count> CursorMut<'_, '_, A, C> {
+    /// Returns the payload of the node at the cursor, or `None` at the
+    /// ghost.
+    #[must_use]
+    #[inline]
+    pub fn current_mut(&mut self) -> Option<&mut A::Payload> {
+        // SAFETY: a node stays live while it is on the queue, its payload
+        // lies apart from its link, and the cursor lends it only while
+        // borrowed mutably from the queue it borrows exclusively.
+        self.current
+            .map(|link| unsafe { A::payload(A::node(link)).as_mut() })
+    }
+}
+
 /// An iterator over the pointers the nodes of a [`TailQueue`] were
 /// pushed with, front to back, or back to front reversed.
 pub struct IterPtr<'head, A: Adapter> {
@@ -473,6 +487,46 @@ impl<A: Adapter> DoubleEndedIterator for Iter<'_, A> {
     }
 }
 
+/// An iterator over the payloads of the nodes of a [`TailQueue`], front
+/// to back, or back to front reversed.
+pub struct IterMut<'head, A: Payload> {
+    nodes: IterPtr<'head, A>,
+    payloads: PhantomData<&'head mut A::Payload>,
+}
+
+impl<A: Payload> IterMut<'_, A> {
+    pub(super) const fn new(nodes: IterPtr<'_, A>) -> IterMut<'_, A> {
+        IterMut {
+            nodes,
+            payloads: PhantomData,
+        }
+    }
+}
+
+impl<'head, A: Payload> Iterator for IterMut<'head, A> {
+    type Item = &'head mut A::Payload;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        // SAFETY: a node stays live while it is on the queue, its payload
+        // lies apart from its link, the iterator borrows the queue
+        // mutably, and it yields each node once.
+        self.nodes
+            .next()
+            .map(|node| unsafe { A::payload(node).as_mut() })
+    }
+}
+
+impl<A: Payload> DoubleEndedIterator for IterMut<'_, A> {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        // SAFETY: as for `next`.
+        self.nodes
+            .next_back()
+            .map(|node| unsafe { A::payload(node).as_mut() })
+    }
+}
+
 impl<A: Adapter, C: Count> fmt::Debug for Cursor<'_, '_, A, C> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -497,6 +551,15 @@ impl<A: Adapter> fmt::Debug for IterPtr<'_, A> {
         f.debug_struct("IterPtr")
             .field("front", &self.front)
             .field("back", &self.back)
+            .finish()
+    }
+}
+
+impl<A: Payload> fmt::Debug for IterMut<'_, A> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IterMut")
+            .field("nodes", &self.nodes)
             .finish()
     }
 }

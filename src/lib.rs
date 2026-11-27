@@ -78,9 +78,9 @@ mod adapter;
 mod count;
 mod cursor;
 
-pub use adapter::Adapter;
+pub use adapter::{Adapter, Payload};
 pub use count::{Count, Counted, Uncounted};
-pub use cursor::{Cursor, CursorMut, Iter, IterPtr};
+pub use cursor::{Cursor, CursorMut, Iter, IterMut, IterPtr};
 
 use core::cell::Cell;
 use core::fmt;
@@ -383,7 +383,8 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     ///   link through another reference, as [`Link::is_linked`] makes,
     ///   may race with the queue's writes;
     /// - no access to the node may conflict with the references the queue
-    ///   hands out to it.
+    ///   hands out to it: `&A::Node`, and `&mut A::Payload` from a
+    ///   [`Payload`] adapter.
     ///
     /// If the queue is dropped while it holds the node, the node must
     /// still be live then.  A node that leaves as `&'nodes mut A::Node`
@@ -827,6 +828,36 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     }
 }
 
+impl<A: Payload, C: Count> TailQueue<'_, A, C> {
+    /// Returns the payload of the first node, or `None` when empty.
+    #[must_use]
+    #[inline]
+    pub fn front_mut(&mut self) -> Option<&mut A::Payload> {
+        // SAFETY: a node stays live while it is on the queue, its payload
+        // lies apart from its link, and the queue lends it only while
+        // borrowed mutably.
+        self.first
+            .map(|link| unsafe { A::payload(A::node(link)).as_mut() })
+    }
+
+    /// Returns the payload of the last node, or `None` when empty.
+    #[must_use]
+    #[inline]
+    pub fn back_mut(&mut self) -> Option<&mut A::Payload> {
+        // SAFETY: as for `front_mut`.
+        self.last
+            .map(|link| unsafe { A::payload(A::node(link)).as_mut() })
+    }
+
+    /// Returns an iterator over the nodes' payloads, front to back;
+    /// reversed, back to front.
+    #[must_use]
+    #[inline]
+    pub const fn iter_mut(&mut self) -> IterMut<'_, A> {
+        IterMut::new(IterPtr::new(self.first, self.last))
+    }
+}
+
 impl<A: Adapter> TailQueue<'_, A, Counted> {
     /// Returns how many nodes the queue holds, in O(1).
     #[must_use]
@@ -858,6 +889,18 @@ impl<'head, A: Adapter, C: Count> IntoIterator for &'head TailQueue<'_, A, C> {
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
+    }
+}
+
+impl<'head, A: Payload, C: Count> IntoIterator
+    for &'head mut TailQueue<'_, A, C>
+{
+    type Item = &'head mut A::Payload;
+    type IntoIter = IterMut<'head, A>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
     }
 }
 
