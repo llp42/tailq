@@ -796,6 +796,114 @@ fn a_counted_walk_from_the_back_ends_with_nothing_left_to_count() {
     while walk.next_back().is_some() {}
 }
 
+/// A counted queue that holds one node counts one when a node is pushed
+/// onto it.  Here a queue that counts three over two nodes, after a stale
+/// copy of its head took the middle one off, pops its first and holds one
+/// node counting two, and then takes a push at the back.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_counted_queue_of_one_node_counts_one_when_pushed_onto() {
+    let nodes = Nodes::new(4);
+    let mut queue = counted_with_one_taken_by_a_copy(&nodes);
+    assert!(queue.pop_front_ptr().is_some(), "two nodes");
+    // SAFETY: the node is live, outlives the queue and is on no queue.
+    unsafe { queue.push_back_ptr(nodes.at(3)) };
+}
+
+/// As above, through a push at the front.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_counted_queue_of_one_node_counts_one_when_pushed_onto_at_the_front() {
+    let nodes = Nodes::new(4);
+    let mut queue = counted_with_one_taken_by_a_copy(&nodes);
+    assert!(queue.pop_front_ptr().is_some(), "two nodes");
+    // SAFETY: the node is live, outlives the queue and is on no queue.
+    unsafe { queue.push_front_ptr(nodes.at(3)) };
+}
+
+/// A counted queue of two nodes, the head of which a stale copy then
+/// links a third node into, so that it counts two over three.
+fn counted_with_one_linked_by_a_copy(nodes: &Nodes) -> CountedQueue {
+    let mut queue = CountedQueue::new();
+    // SAFETY: the nodes are live and outlive the queue, and each is on no
+    // queue when pushed; the copy linking a node is the misuse.
+    unsafe {
+        queue.push_back_ptr(nodes.at(0));
+        queue.push_back_ptr(nodes.at(2));
+        let mut stale = ManuallyDrop::new(ptr::read(&raw const queue));
+        stale
+            .cursor_mut_from_ptr(nodes.at(0))
+            .insert_after_ptr(nodes.at(1));
+    }
+    queue
+}
+
+/// A counted walk that steps on to another node has that node left to
+/// count, so its `len` never says none while it has a node to hand out.
+/// Here the walk steps twice from the front over a queue that counts two
+/// over three nodes, which the second step leaves with a node to hand out
+/// and none to count.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_counted_walk_from_the_front_that_steps_on_has_a_node_left_to_count() {
+    let nodes = Nodes::new(3);
+    let queue = counted_with_one_linked_by_a_copy(&nodes);
+    let mut walk = queue.iter_ptr();
+    assert!(walk.next().is_some(), "three nodes");
+    assert!(walk.next().is_some(), "three nodes");
+    assert_eq!(walk.len(), 0, "unreachable");
+}
+
+/// As above, from the back.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_counted_walk_from_the_back_that_steps_on_has_a_node_left_to_count() {
+    let nodes = Nodes::new(3);
+    let queue = counted_with_one_linked_by_a_copy(&nodes);
+    let mut walk = queue.iter_ptr();
+    assert!(walk.next_back().is_some(), "three nodes");
+    assert!(walk.next_back().is_some(), "three nodes");
+    assert_eq!(walk.len(), 0, "unreachable");
+}
+
+/// Three nodes whose middle link keeps its `prev` but has the forward
+/// word of a link that left, `usize::MAX`, as if half relinked, on a queue
+/// that is never dropped, since its drop would follow that word.
+fn half_relinked_middle(nodes: &Nodes) -> ManuallyDrop<Queue> {
+    let mut queue = ManuallyDrop::new(Queue::new());
+    // SAFETY: the nodes are live and outlive the queue, and each is on no
+    // queue when pushed.  A link is `repr(C)` and starts with its forward
+    // word; writing it is the misuse.
+    unsafe {
+        for i in 0..3 {
+            queue.push_back_ptr(nodes.at(i));
+        }
+        let link = ptr::from_ref(&(*nodes.at(1).as_ptr()).link);
+        link.cast::<usize>().cast_mut().write(usize::MAX);
+    }
+    queue
+}
+
+/// A walk refuses the forward word of a link that left before it steps to
+/// it, rather than read it as a link at its next step.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_walk_does_not_step_to_the_forward_word_of_a_link_that_left() {
+    let nodes = Nodes::new(3);
+    let queue = half_relinked_middle(&nodes);
+    let mut walk = queue.iter_ptr();
+    while walk.next().is_some() {}
+}
+
+/// As above, through a fold.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_fold_does_not_step_to_the_forward_word_of_a_link_that_left() {
+    let nodes = Nodes::new(3);
+    let queue = half_relinked_middle(&nodes);
+    queue.iter_ptr().for_each(drop);
+}
+
 /// Clearing a queue checks every link before it writes any, so a corrupt
 /// queue does not walk into another.  Here the first node of `queue` holds
 /// the bytes of the first of `other`.

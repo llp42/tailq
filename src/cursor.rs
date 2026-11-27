@@ -587,12 +587,15 @@ impl<A: Adapter, C: Count> Iterator for IterPtr<'_, A, C> {
         let at = self.front?;
         Self::check_left(at);
         self.left.sub_one();
-        if is(self.back, at) {
+        let met = is(self.back, at);
+        // A counted walk has nothing left to count where its ends meet,
+        // and something before.
+        debug_assert!(
+            self.left.exact().is_none_or(|left| (left == 0) == met),
+            "tail queue: the queue is corrupt",
+        );
+        if met {
             // The ends met on the last node left.
-            debug_assert!(
-                self.left.exact().is_none_or(|left| left == 0),
-                "tail queue: the queue is corrupt",
-            );
             self.finish();
         } else {
             // SAFETY: a node stays live while it is on the queue.  Read
@@ -603,6 +606,11 @@ impl<A: Adapter, C: Count> Iterator for IterPtr<'_, A, C> {
             debug_assert!(
                 next.is_some(),
                 "tail queue: the queue changed under the walk",
+            );
+            // The forward word debug builds fill a leaving link's with.
+            debug_assert!(
+                !is(next, NOWHERE),
+                "tail queue: the queue is corrupt"
             );
             // SAFETY: as above.
             self.front = Some(unsafe { next.unwrap_unchecked() });
@@ -636,6 +644,11 @@ impl<A: Adapter, C: Count> Iterator for IterPtr<'_, A, C> {
             debug_assert!(
                 next.is_some(),
                 "tail queue: the queue changed under the walk",
+            );
+            // As in `next`.
+            debug_assert!(
+                !is(next, NOWHERE),
+                "tail queue: the queue is corrupt"
             );
             // SAFETY: as in `next`.
             at = unsafe { next.unwrap_unchecked() };
@@ -708,12 +721,13 @@ impl<A: Adapter, C: Count> DoubleEndedIterator for IterPtr<'_, A, C> {
         let at = self.back?;
         Self::check_left(at);
         self.left.sub_one();
-        if is(self.front, at) {
-            // As in `next`, from the other end.
-            debug_assert!(
-                self.left.exact().is_none_or(|left| left == 0),
-                "tail queue: the queue is corrupt",
-            );
+        let met = is(self.front, at);
+        // As in `next`, from the other end.
+        debug_assert!(
+            self.left.exact().is_none_or(|left| (left == 0) == met),
+            "tail queue: the queue is corrupt",
+        );
+        if met {
             self.finish();
         } else {
             // SAFETY: as in `next`, from the other end: `at` is not the

@@ -544,6 +544,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         if let Some(first) = self.first {
             // SAFETY: the first node is live and on this queue.
             unsafe { self.check(first) };
+            self.check_count(is(self.last, first));
         }
         let next = self.first;
         self.first = Some(link);
@@ -582,6 +583,7 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         if let Some(last) = self.last {
             // SAFETY: the last node is live and on this queue.
             unsafe { self.check(last) };
+            self.check_count(is(self.first, last));
         }
         let before = self.last;
         self.last = Some(link);
@@ -864,19 +866,20 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         own.unwrap_or(at)
     }
 
-    /// Checks, in debug builds, that a counted queue whose last node is
-    /// leaving counts that one node, and that one keeping a node counts
-    /// more, as a stale copy of its head that took a node off or linked one
-    /// would leave it counting otherwise.
+    /// Checks, in debug builds, that a counted queue that holds one node,
+    /// as `one` says, counts one, and that one that holds more counts more,
+    /// as a stale copy of its head that took a node off or linked one would
+    /// leave it counting otherwise.  The pops and removals tell it before
+    /// they write, the pushes onto a queue that holds a node too.
     ///
     /// # Panics
     ///
-    /// In debug builds, when the queue counts one node and keeps one, or
-    /// another number and `empties`.
+    /// In debug builds, when the queue counts one node and `one` is false,
+    /// or another number and `one` is true.
     #[inline]
-    fn check_count(&self, empties: bool) {
+    fn check_count(&self, one: bool) {
         debug_assert!(
-            self.count.exact().is_none_or(|left| (left == 1) == empties),
+            self.count.exact().is_none_or(|left| (left == 1) == one),
             "tail queue: the queue is corrupt",
         );
     }
