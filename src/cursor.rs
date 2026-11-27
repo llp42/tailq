@@ -510,8 +510,12 @@ where
 /// head by pointer, such as one in a `static mut`, may still remove the
 /// node the walk has just handed out, from either end, as BSD's
 /// `TAILQ_FOREACH_SAFE` allows: each step reads its next link before it
-/// hands a node out.  Any other change while the walk is in use, such as
-/// removing a node it has not handed out yet, is undefined behaviour.  An
+/// hands a node out.  The node removed so may then be freed once nothing
+/// uses the reference the walk handed out to it: a closure that
+/// [`for_each`](Iterator::for_each), [`fold`](Iterator::fold) or the like
+/// is given holds it until the closure returns, so it must not free the
+/// node.  Any other change while the walk is in use, such as removing a
+/// node it has not handed out yet, is undefined behaviour.  An
 /// [`IterMut`] lends each payload it hands out for as long as that is used,
 /// and such code takes no other reference to that node from the queue
 /// meanwhile, through [`front`](TailQueue::front), a walk, a cursor or a

@@ -490,8 +490,9 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// `node` must point at a live, aligned node whose link is on no
     /// queue, and it must be valid for reads and writes of the whole node.
     /// Until the node leaves the queue, or, if the queue is never dropped,
-    /// as in a [`ManuallyDrop`](core::mem::ManuallyDrop), until the last use
-    /// of the queue and of every reference it handed out:
+    /// as in a [`ManuallyDrop`](core::mem::ManuallyDrop), until the queue's
+    /// last use, and in either case until the last use of every reference
+    /// the queue handed out to the node:
     ///
     /// - it must stay live and unmoved, and `node` must stay valid for it:
     ///   the node may be reached only through `node` and pointers derived
@@ -513,18 +514,21 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
     /// of `'nodes`, as the reference's lifetime says, and nothing else may
     /// access the node for as long as the reference is used.
     ///
-    /// A `&mut` to the whole node, whether a queue handed it out or the
-    /// caller made it from `node`, as a `Drop` of a boxed node does, keeps
-    /// every queue the node is still on unused for as long as it is used:
-    /// their operations, and in debug builds their checks, read the links
-    /// of nodes they do not change.  Only [`remove_ptr`](Self::remove_ptr),
-    /// given a pointer to the node taken from that `&mut`, and
+    /// A `&mut` or a `Box` to the whole node, whether a queue handed it out
+    /// or the caller made it from `node`, as rebuilding a boxed node does,
+    /// keeps every queue the node is still on unused for as long as it is
+    /// used, a `Box` for as long as it lives: their operations, and in debug
+    /// builds their checks, read the links of nodes they do not change.
+    /// Only [`remove_ptr`](Self::remove_ptr), given a pointer to the node
+    /// taken from that `&mut` or `Box`, and
     /// [`contains_ptr`](Self::contains_ptr), given the node's own address,
     /// reach the node through the pointer they are given alone, or not at
     /// all, so a node borrowed so can still look itself up and leave a
-    /// queue: a lookup of any other node may walk through this one.  `node` itself is not one
-    /// to give `remove_ptr` then: the `&mut` came from it, and an access
-    /// through it while the `&mut` is used is undefined behaviour.
+    /// queue; a lookup of any other node may walk through this one.  `node`
+    /// itself is not one to give `remove_ptr` then: the `&mut` or `Box` came
+    /// from it, and an access through it meanwhile is undefined behaviour.
+    /// So the `Drop` of a boxed node that is still linked may unlink that
+    /// node, while no `Box` of another node on its queues lives.
     #[inline]
     pub unsafe fn push_front_ptr(&mut self, node: NonNull<A::Node>) {
         // SAFETY: the caller keeps the push contract.
