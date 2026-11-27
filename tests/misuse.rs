@@ -581,6 +581,30 @@ fn a_stale_head_does_not_pop_a_node_that_already_left() {
     assert!(stale.pop_front_ptr().is_none(), "unreachable");
 }
 
+/// The membership walk refuses the forward word of a link that left.  Here
+/// a stale copy of a head of five nodes, kept after the queue popped its
+/// first, removes the fourth: the walk from the front reads the poisoned
+/// word of the node that left before the walk from the back meets the
+/// fourth.
+#[test]
+#[should_panic(expected = "tail queue: the queue is corrupt")]
+fn a_stale_head_whose_first_left_removes_nothing() {
+    let nodes = Nodes::new(5);
+    let mut queue = Queue::new();
+    // SAFETY: the nodes are live and outlive the queue, and each is on no
+    // queue when pushed.
+    unsafe {
+        for i in 0..5 {
+            queue.push_back_ptr(nodes.at(i));
+        }
+    }
+    // SAFETY: a head is plain pointers, and the copy is never dropped.
+    let mut stale = ManuallyDrop::new(unsafe { ptr::read(&raw const queue) });
+    assert!(queue.pop_front_ptr().is_some(), "five nodes");
+    // SAFETY: the misuse: the copy is not the queue.
+    unsafe { stale.remove_ptr(nodes.at(3)) };
+}
+
 /// Clearing a queue checks every link before it writes any, so a corrupt
 /// queue does not walk into another.  Here the first node of `queue` holds
 /// the bytes of the first of `other`.

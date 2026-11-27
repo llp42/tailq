@@ -892,6 +892,11 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
                     after != back,
                     "tail queue: the link is not on this queue"
                 );
+                // The forward word of a link that left: a stale head.
+                assert!(
+                    after != NOWHERE.as_ptr(),
+                    "tail queue: the queue is corrupt"
+                );
                 ahead = after;
                 // SAFETY: as above; `ahead` lay before `back`, so `back` is
                 // not the first link.
