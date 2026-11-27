@@ -235,6 +235,28 @@ where
 /// );
 /// ```
 ///
+/// A macro of the caller's that passes doc comments on takes them as
+/// tokens, since a `meta` fragment cannot be told from another attribute:
+///
+/// ```
+/// use tailq::Link;
+///
+/// struct Thread {
+///     link: Link,
+/// }
+///
+/// macro_rules! thread_adapter {
+///     ($(#[$($attr:tt)*])* $name:ident) => {
+///         tailq::adapter!($(#[$($attr)*])* $name = Thread { link });
+///     };
+/// }
+///
+/// thread_adapter!(
+///     /// The run queue's adapter.
+///     RunLink
+/// );
+/// ```
+///
 /// Any other attribute fails to compile, a `#[cfg]` or a `#[deprecated]`
 /// among them:
 ///
@@ -343,6 +365,7 @@ where
 #[macro_export]
 macro_rules! adapter {
     ($(#[doc $($doc:tt)*])* $vis:vis $name:ident $($rest:tt)*) => {
+        $($crate::__adapter!(@doc $($doc)*);)*
         $crate::__adapter!(@start [$(#[doc $($doc)*])* $vis $name] $($rest)*);
     };
 }
@@ -352,6 +375,10 @@ macro_rules! adapter {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __adapter {
+    // A doc attribute is `#[doc = ...]` or `#[doc(...)]`: a path that only
+    // starts with `doc`, such as `doc::derive`, names another attribute.
+    (@doc = $($value:tt)*) => {};
+    (@doc ($($list:tt)*)) => {};
     (@start $head:tt = $($rest:tt)*) => {
         $crate::__adapter!(@define $head [] [] = $($rest)*);
     };

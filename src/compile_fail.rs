@@ -306,6 +306,16 @@
 //! } impl Sink for Dummy);
 //! ```
 //!
+//! An attribute whose path only starts with `doc` is no doc attribute,
+//! and `adapter!` takes no other:
+//!
+//! ```compile_fail
+//! use tailq::Link;
+//! mod doc { pub use core::prelude::v1::derive; }
+//! struct Node { link: Link }
+//! tailq::adapter!(#[doc::derive(PartialEq)] NodeLink = Node { link });
+//! ```
+//!
 //! Only `adapter!` implements `Adapter`: the trait is sealed.
 //!
 //! ```compile_fail,E0277
