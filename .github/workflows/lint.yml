@@ -56,3 +56,12 @@ jobs:
       - uses: ./.github/actions/setup-rust
       # A broken intra-doc link or a missing doc fails the build.
       - run: cargo doc --no-deps --locked
+
+  workflows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      # Every job time-limited, every test run built first and then run under limit.sh, clippy on release builds,
+      # and coverage.py's filter and merge: what d7aa842 and f9f1d04 put in.
+      - run: python3 -I .github/check_workflows.py
