@@ -450,6 +450,24 @@ impl<A: Adapter, C: Count> IterPtr<'_, A, C> {
         self.front = None;
         self.back = None;
     }
+
+    /// Checks, in debug builds, that the node at `at`, which the walk is
+    /// about to hand out, is still on the queue: the walk contract lets the
+    /// queue lose only the nodes the walk has handed out.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when the node left the queue.
+    #[inline]
+    fn check_left(at: NonNull<Link>) {
+        // SAFETY: a node stays live while it is on the queue, and the walk
+        // contract keeps this one on it.
+        let linked = unsafe { at.as_ref() }.is_linked();
+        debug_assert!(
+            linked,
+            "tail queue: a node the walk had not handed out left the queue",
+        );
+    }
 }
 
 impl<A: Adapter, C: Count> Iterator for IterPtr<'_, A, C> {
@@ -458,6 +476,7 @@ impl<A: Adapter, C: Count> Iterator for IterPtr<'_, A, C> {
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let at = self.front?;
+        Self::check_left(at);
         self.left.sub_one();
         if is(self.back, at) {
             // The ends met on the last node left.
@@ -465,14 +484,15 @@ impl<A: Adapter, C: Count> Iterator for IterPtr<'_, A, C> {
         } else {
             // SAFETY: a node stays live while it is on the queue.  Read
             // before the node is handed out, so that the caller may remove
-            // it; a branch, not a select, so that nothing but the load lies
-            // between one step and the next.
-            match unsafe { at.as_ref() }.next.get() {
-                Some(after) => self.front = Some(after),
-                // The node left the queue: the walk ends rather than step
-                // past it.
-                None => self.finish(),
-            }
+            // it.  `at` is not the last node left, and the walk contract
+            // keeps the nodes after it on the queue, so it has a next one.
+            let next = unsafe { at.as_ref() }.next.get();
+            debug_assert!(
+                next.is_some(),
+                "tail queue: the queue changed under the walk",
+            );
+            // SAFETY: as above.
+            self.front = Some(unsafe { next.unwrap_unchecked() });
         }
         // SAFETY: a node stays live while it is on the queue, and the
         // iterator borrows the queue.
@@ -484,22 +504,28 @@ impl<A: Adapter, C: Count> Iterator for IterPtr<'_, A, C> {
     where
         F: FnMut(B, Self::Item) -> B,
     {
-        let Some(mut at) = self.front else {
+        let (Some(mut at), Some(back)) = (self.front, self.back) else {
             return init;
         };
         let mut acc = init;
         loop {
-            // SAFETY: a node stays live while it is on the queue.  Read
-            // before the node is handed out, so that `f` may remove it.
+            Self::check_left(at);
+            // SAFETY: as in `next`; read before the node is handed out, so
+            // that `f` may remove it.
             let next = unsafe { at.as_ref() }.next.get();
-            let last = is(self.back, at);
+            let last = at.as_ptr() == back.as_ptr();
             // SAFETY: a node stays live while it is on the queue, and the
             // iterator borrows the queue.
             acc = f(acc, unsafe { node_of::<A>(at) });
-            match next {
-                Some(after) if !last => at = after,
-                _ => return acc,
+            if last {
+                return acc;
             }
+            debug_assert!(
+                next.is_some(),
+                "tail queue: the queue changed under the walk",
+            );
+            // SAFETY: as in `next`.
+            at = unsafe { next.unwrap_unchecked() };
         }
     }
 
@@ -538,46 +564,46 @@ impl<A: Adapter, C: Count> DoubleEndedIterator for IterPtr<'_, A, C> {
     where
         F: FnMut(B, Self::Item) -> B,
     {
-        let Some(mut at) = self.back else {
+        let (Some(front), Some(mut at)) = (self.front, self.back) else {
             return init;
         };
         let mut acc = init;
         loop {
-            // SAFETY: as in `fold`.  The word itself, which the next step
-            // takes as it was loaded, with the head's marker and a missing
-            // link tested by branches beside it rather than a select on it.
-            let prev = unsafe { at.as_ref() }.prev.get();
-            let first = is(self.front, at);
+            Self::check_left(at);
+            // SAFETY: as in `fold`, from the other end; a node on the queue
+            // has a `prev`, and `check_left` makes sure this one is on it.
+            let prev = unsafe { at.as_ref().prev.get().unwrap_unchecked() };
+            let first = at.as_ptr() == front.as_ptr();
             // SAFETY: as in `fold`.
             acc = f(acc, unsafe { node_of::<A>(at) });
-            match prev {
-                Some(before)
-                    if !first && before.as_ptr() != NOWHERE.as_ptr() =>
-                {
-                    at = before;
-                }
-                _ => return acc,
+            if first {
+                return acc;
             }
+            debug_assert!(
+                prev.as_ptr() != NOWHERE.as_ptr(),
+                "tail queue: the queue changed under the walk",
+            );
+            at = prev;
         }
     }
 
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
         let at = self.back?;
+        Self::check_left(at);
         self.left.sub_one();
         if is(self.front, at) {
             // As in `next`, from the other end.
             self.finish();
         } else {
-            // SAFETY: as in `next`.
-            match unsafe { at.as_ref() }.prev.get() {
-                Some(before) if before.as_ptr() != NOWHERE.as_ptr() => {
-                    self.back = Some(before);
-                }
-                // The first node, met only once the queue changed, or a
-                // node that left it.
-                _ => self.finish(),
-            }
+            // SAFETY: as in `next`, from the other end: `at` is not the
+            // first node left, so its `prev` is the previous node's link.
+            let prev = unsafe { at.as_ref().prev.get().unwrap_unchecked() };
+            debug_assert!(
+                prev.as_ptr() != NOWHERE.as_ptr(),
+                "tail queue: the queue changed under the walk",
+            );
+            self.back = Some(prev);
         }
         // SAFETY: a node stays live while it is on the queue, and the
         // iterator borrows the queue.
