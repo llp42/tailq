@@ -736,23 +736,6 @@ fn pointers_from_the_queue_write_the_nodes() {
     assert_eq!(keys(&queue), [20, 24, 26]);
 }
 
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic(expected = "tail queue: the link is already on a queue")]
-fn a_linked_node_cannot_join_again() {
-    let mut nodes: Vec<Node> = (0..1).map(node).collect();
-    let base = nodes.as_mut_ptr();
-    let mut queue = Queue::new();
-    let mut other = Queue::new();
-    // SAFETY: the node is live and outlives both queues; the second push
-    // is the misuse under test, caught before it writes anything.
-    unsafe {
-        let at = NonNull::new_unchecked(base);
-        queue.push_back_ptr(at);
-        other.push_back_ptr(at);
-    }
-}
-
 /// What a payload node carries besides its link.
 struct Info {
     key: u32,

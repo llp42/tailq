@@ -75,6 +75,8 @@
 #![no_std]
 
 mod adapter;
+#[cfg(doctest)]
+mod compile_fail;
 mod count;
 mod cursor;
 
