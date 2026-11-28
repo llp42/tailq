@@ -1299,8 +1299,8 @@ fn no_cursor_rests_on_a_node_the_links_forward_skip() {
     }
 }
 
-/// Pushes the first two nodes onto a queue and zeroes the link of the one
-/// at `i` in place, as a memset of the node would.
+/// Pushes every node onto a queue and zeroes the link of the one at `i` in
+/// place, as a memset of the node would.
 ///
 /// # Safety
 ///
@@ -1309,8 +1309,9 @@ unsafe fn zeroed_at(nodes: &Nodes, i: usize) -> Queue {
     let mut queue = Queue::new();
     // SAFETY: the caller's; zeroing the link is the misuse.
     unsafe {
-        queue.push_back_ptr(nodes.at(0));
-        queue.push_back_ptr(nodes.at(1));
+        for k in 0..nodes.len {
+            queue.push_back_ptr(nodes.at(k));
+        }
         ptr::write(&raw mut (*nodes.at(i).as_ptr()).link, Link::new());
     }
     queue
@@ -1337,6 +1338,62 @@ fn a_zeroed_last_link_is_not_popped() {
     // SAFETY: as above.
     let mut queue = unsafe { zeroed_at(&nodes, 1) };
     assert!(queue.pop_back_ptr().is_some(), "unreachable");
+}
+
+/// As above, for the last of three: the queue drops as the panic unwinds,
+/// and the walk from the back meets the zeroed `prev` before the walks
+/// meet.
+#[test]
+#[should_panic(expected = "tail queue: the link is on no queue")]
+fn a_zeroed_last_link_of_three_drops_cleanly() {
+    let nodes = Nodes::new(3);
+    // SAFETY: as above.
+    let mut queue = unsafe { zeroed_at(&nodes, 2) };
+    assert!(queue.pop_back_ptr().is_some(), "unreachable");
+}
+
+/// A forward word that skips to the last link lets the walk from the front
+/// pass the walk from the back as the queue drops, onto a link the back
+/// walk released, whose forward word is `NOWHERE`.
+#[test]
+#[should_panic(
+    expected = "tail queue: the previous link does not point at this one"
+)]
+fn a_forward_skip_past_the_back_walk_drops_cleanly() {
+    let nodes = Nodes::new(5);
+    let mut queue = Queue::new();
+    // SAFETY: the nodes are live, outlive the queue and are on no queue
+    // when pushed; pointing the second's past the fourth is the misuse.
+    unsafe {
+        for i in 0..5 {
+            queue.push_back_ptr(nodes.at(i));
+        }
+        let skip = ptr::from_ref(&(*nodes.at(1).as_ptr()).link);
+        let past = ptr::from_ref(&(*nodes.at(4).as_ptr()).link);
+        skip.cast::<*const Link>().cast_mut().write(past);
+        assert!(queue.cursor_from_ptr(nodes.at(2)).current().is_some());
+    }
+}
+
+/// A backward word overwritten with the mark of the first link sends the
+/// walk from the back to `NOWHERE` as the queue drops.
+#[test]
+#[should_panic(expected = "tail queue: the link is not on this queue")]
+fn a_middle_link_marked_first_drops_cleanly() {
+    let nodes = Nodes::new(3);
+    let mut queue = Queue::new();
+    // SAFETY: the nodes are live, outlive the queue and are on no queue
+    // when pushed.  A link is `repr(C)` and its backward word follows its
+    // forward one; marking the last as first is the misuse.
+    unsafe {
+        for i in 0..3 {
+            queue.push_back_ptr(nodes.at(i));
+        }
+        let link = ptr::from_ref(&(*nodes.at(2).as_ptr()).link);
+        let prev = link.cast::<*const Link>().cast_mut().add(1);
+        prev.write(ptr::without_provenance(usize::MAX));
+        assert!(queue.pop_back_ptr().is_some(), "unreachable");
+    }
 }
 
 /// A link with no next is at the back of a queue only when the head names

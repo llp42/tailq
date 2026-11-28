@@ -1332,6 +1332,18 @@ unsafe fn release_between(first: NonNull<Link>, last: NonNull<Link>) {
             // The walks met between two nodes.
             return;
         }
+        // A queue that a debug check caught may drop while its panic
+        // unwinds, holding a word that names no link: the forward word of a
+        // link the other walk released after the walks crossed, or a
+        // backward word overwritten in place or cleared by such a release.
+        // The walks stop there, so that it drops cleanly, as a walk from
+        // the front alone did.
+        #[cfg(debug_assertions)]
+        if next.as_ptr() == NOWHERE.as_ptr()
+            || before.is_none_or(|prev| prev.as_ptr() == NOWHERE.as_ptr())
+        {
+            return;
+        }
         // SAFETY: `back` lies after `ahead`, so its `prev` is the previous
         // node's link, not `NOWHERE`.
         (ahead, back) = (next, unsafe { before.unwrap_unchecked() });
