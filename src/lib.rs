@@ -92,6 +92,7 @@ pub use cursor::{Cursor, CursorMut, Iter, IterMut, IterPtr};
 
 use core::cell::Cell;
 use core::fmt;
+use core::hint;
 use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ptr::{self, NonNull};
@@ -588,11 +589,17 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         let before = self.last;
         self.last = Some(link);
         new.next.set(None);
-        new.prev.set(Some(before.unwrap_or(NOWHERE)));
-        match before {
+        if let Some(last) = before {
             // SAFETY: the old last node is live.
-            Some(last) => unsafe { last.as_ref() }.next.set(Some(link)),
-            None => self.first = Some(link),
+            unsafe { last.as_ref() }.next.set(Some(link));
+            new.prev.set(Some(last));
+        } else {
+            // Cold, so that the arms' stores to `prev` stay apart: merged,
+            // they compile to a select, which a pop at the back then waits
+            // on.
+            hint::cold_path();
+            self.first = Some(link);
+            new.prev.set(Some(NOWHERE));
         }
         self.count.add(1);
     }
