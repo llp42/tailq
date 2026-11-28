@@ -92,6 +92,7 @@ pub use cursor::{Cursor, CursorMut, Iter, IterMut, IterPtr};
 
 use core::cell::Cell;
 use core::fmt;
+use core::hint;
 use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ptr::{self, NonNull};
@@ -588,11 +589,17 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         let before = self.last;
         self.last = Some(link);
         new.next.set(None);
-        new.prev.set(Some(before.unwrap_or(NOWHERE)));
-        match before {
+        if let Some(last) = before {
             // SAFETY: the old last node is live.
-            Some(last) => unsafe { last.as_ref() }.next.set(Some(link)),
-            None => self.first = Some(link),
+            unsafe { last.as_ref() }.next.set(Some(link));
+            new.prev.set(Some(last));
+        } else {
+            // Cold, so that the arms' stores to `prev` stay apart: merged,
+            // they compile to a select, which a pop at the back then waits
+            // on.
+            hint::cold_path();
+            self.first = Some(link);
+            new.prev.set(Some(NOWHERE));
         }
         self.count.add(1);
     }
@@ -1280,19 +1287,58 @@ impl<'nodes, A: Adapter, C: Count> TailQueue<'nodes, A, C> {
         before == last || (before == nowhere && last == ptr::null_mut())
     }
 
-    /// Marks every node's link as on no queue and empties the queue.
+    /// Marks every node's link as on no queue and empties the queue, as
+    /// [`release_between`] does.
     #[inline]
     fn release_all(&mut self) {
-        let mut at = self.first.take();
-        while let Some(ptr) = at {
-            // SAFETY: a node stays live while it is on the queue.
-            let link = unsafe { ptr.as_ref() };
-            at = link.next.get();
-            release(link);
-        }
-        self.last = None;
+        let ends = (self.first.take(), self.last.take());
         let _: usize = self.count.take();
+        if let (Some(first), Some(last)) = ends {
+            // SAFETY: they are the ends of this queue, whose nodes are live.
+            unsafe { release_between(first, last) };
+        }
     }
+}
+
+/// Marks as on no queue every link from `first` to `last`, the ends of a
+/// queue.
+///
+/// It walks from both ends at once until the walks meet: each walk's
+/// loads wait only on its own, so the two overlap, and a queue too long
+/// for the cache misses on two lines at a time.  It is not generic, so
+/// every queue type shares it.
+///
+/// # Safety
+///
+/// `first` and `last` must be the first and the last link of a queue
+/// whose nodes are live.
+#[inline]
+unsafe fn release_between(first: NonNull<Link>, last: NonNull<Link>) {
+    let (mut ahead, mut back) = (first, last);
+    while ahead.as_ptr() != back.as_ptr() {
+        // SAFETY: a node stays live while it is on the queue.
+        let (front, rear) = unsafe { (ahead.as_ref(), back.as_ref()) };
+        // Read before either link is released.
+        let after = front.next.get();
+        let before = rear.prev.get();
+        release(front);
+        release(rear);
+        // Only a link overwritten in place has no next short of `back`: the
+        // walks stop there, where a walk from the front alone would.
+        let Some(next) = after else {
+            return;
+        };
+        if next.as_ptr() == back.as_ptr() {
+            // The walks met between two nodes.
+            return;
+        }
+        // SAFETY: `back` lies after `ahead`, so its `prev` is the previous
+        // node's link, not `NOWHERE`.
+        (ahead, back) = (next, unsafe { before.unwrap_unchecked() });
+    }
+    // The walks met on a node.
+    // SAFETY: as above.
+    release(unsafe { ahead.as_ref() });
 }
 
 impl<A: Payload, C: Count> TailQueue<'_, A, C> {
